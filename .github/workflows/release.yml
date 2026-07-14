@@ -1,0 +1,43 @@
+name: Release
+
+on:
+  push:
+    tags:
+      - "v*"
+
+permissions:
+  contents: write
+
+jobs:
+  release:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Verify tag matches ecko.json version
+        run: |
+          tag="${GITHUB_REF_NAME#v}"
+          version="$(jq -r .version ecko.json)"
+          if [ "$tag" != "$version" ]; then
+            echo "Tag v$tag does not match ecko.json version $version" >&2
+            exit 1
+          fi
+
+      - name: Pack the package
+        run: |
+          # Named after the repo so `ecko add https://github.com/<owner>/<repo>`
+          # resolves to it. The archive is the manifest + all sources at the
+          # root, the layout `ecko add` expects.
+          name="${GITHUB_REPOSITORY##*/}"
+          zip -X "$name.zip" ecko.json *.ecko
+          echo "PKG_ZIP=$name.zip" >> "$GITHUB_ENV"
+
+      - name: Create GitHub release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          # Attach the packed zip so `ecko add .../releases/latest/download/<name>.zip` works.
+          gh release create "$GITHUB_REF_NAME" \
+            --title "$GITHUB_REF_NAME" \
+            --generate-notes \
+            "$PKG_ZIP"

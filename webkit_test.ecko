@@ -1,0 +1,83 @@
+# Offline tests (ecko test): the pure web-app helpers - HTML escaping,
+# auto-escaping templates, signed cookies, cookie building/parsing, and the
+# CORS / security middleware. No network, no server.
+import std.test
+import "./main.ecko"
+
+test.case("escape covers the five HTML-significant characters", || {
+    test.eq(
+        main.escape("<a href='x' title=\"y\">A & B</a>"),
+        "&lt;a href=&#39;x&#39; title=&quot;y&quot;&gt;A &amp; B&lt;/a&gt;",
+    )
+})
+
+test.case("render escapes interpolated values by default", || {
+    out = main.render(r"<h1>{{ title }}</h1>", { title: "Tom & Jerry" })
+    test.eq(out, "<h1>Tom &amp; Jerry</h1>")
+})
+
+test.case("render auto-escapes an XSS payload", || {
+    out = main.render(r"<p>{{ bio }}</p>", { bio: "<script>steal()</script>" })
+    test.eq(out, "<p>&lt;script&gt;steal()&lt;/script&gt;</p>")
+})
+
+test.case("triple braces opt out of escaping for trusted HTML", || {
+    out = main.render(r"<div>{{{ html }}}</div>", { html: "<b>bold</b>" })
+    test.eq(out, "<div><b>bold</b></div>")
+})
+
+test.case("render fills multiple holes and leaves text intact", || {
+    out = main.render(r"{{ a }} and {{ b }}!", { a: "one", b: "two" })
+    test.eq(out, "one and two!")
+})
+
+test.case("a missing key renders empty", || {
+    test.eq(main.render(r"[{{ nope }}]", { a: 1 }), "[]")
+})
+
+test.case("sign then unsign round-trips the value", || {
+    signed = main.sign("user=42", "s3cret")
+    test.eq(main.unsign(signed, "s3cret"), "user=42")
+})
+
+test.case("unsign rejects a tampered value", || {
+    signed = main.sign("user=42", "s3cret")
+    tampered = replace(signed, "42", "99")
+    test.eq(main.unsign(tampered, "s3cret"), null)
+})
+
+test.case("unsign rejects a wrong secret", || {
+    signed = main.sign("user=42", "s3cret")
+    test.eq(main.unsign(signed, "other"), null)
+})
+
+test.case("cookie builds a Set-Cookie with the security flags", || {
+    c = main.cookie(
+        "sid",
+        "abc",
+        { http_only: true, secure: true, same_site: "Lax", max_age: 3600, path: "/" },
+    )
+    test.eq(c, "sid=abc; Path=/; Max-Age=3600; HttpOnly; Secure; SameSite=Lax")
+})
+
+test.case("parse_cookies reads a Cookie header into a map", || {
+    m = main.parse_cookies("sid=abc; theme=dark")
+    test.eq(get(m, "sid"), "abc")
+    test.eq(get(m, "theme"), "dark")
+})
+
+test.case("cors middleware adds the allow-origin header", || {
+    mw = main.cors({ origin: "*" })
+    # a fake downstream returning a bare response map
+    next = |req| { status: 200, headers: empty_map(), body: "ok" }
+    resp = mw({ method: "GET", headers: empty_map() }, next)
+    test.eq(get(resp.headers, "access-control-allow-origin"), "*")
+})
+
+test.case("security_headers middleware sets hardening headers", || {
+    mw = main.security_headers()
+    next = |req| { status: 200, headers: empty_map(), body: "ok" }
+    resp = mw({ method: "GET", headers: empty_map() }, next)
+    test.eq(get(resp.headers, "x-content-type-options"), "nosniff")
+    test.eq(get(resp.headers, "x-frame-options"), "DENY")
+})

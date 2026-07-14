@@ -1,0 +1,168 @@
+# webkit - SaaS web-app batteries for Ecko, written in Ecko.
+#
+# Auto-escaping HTML templates (XSS-safe by default), HMAC-signed cookies,
+# a session helper, and CORS / security-header middleware for std.web. Pure
+# Ecko over std.hash + std.encoding + std.random - no capabilities needed.
+
+import std.hash
+import std.random
+
+export { escape, render, sign, unsign, cookie, parse_cookies, session_new, session_read, cors, security_headers }
+
+# --- HTML escaping ---------------------------------------------------------
+# The five characters that matter in HTML text and quoted-attribute contexts.
+fn escape(s) {
+    a = replace(string(s), "&", "&amp;")
+    b = replace(a, "<", "&lt;")
+    c = replace(b, ">", "&gt;")
+    d = replace(c, "\"", "&quot;")
+    replace(d, "'", "&#39;")
+}
+
+# --- templating ------------------------------------------------------------
+# render(tmpl, data): fill {{ key }} holes with data[key], HTML-ESCAPED by
+# default; {{{ key }}} inserts the value raw (opt out only for trusted HTML).
+# Pass the template as a raw string (r"...") or file content so Ecko's own
+# {expr} interpolation doesn't touch the {{ }} holes.
+fn lookup(data, key) {
+    v = get(data, trim(key))
+    if is_null(v) { "" } else { string(v) }
+}
+
+fn render(tmpl, data) {
+    mut out = ""
+    mut rest = tmpl
+    loop {
+        i = index_of(rest, r"{{")
+        if i < 0 {
+            out = out + rest
+            return out
+        }
+        out = out + rest[0..i]
+        rest = rest[i..len(rest)]
+        if starts_with(rest, r"{{{") {
+            close = index_of(rest, r"}}}")
+            if close < 0 {
+                # Unterminated: emit the rest literally and stop.
+                return out + rest
+            }
+            out = out + lookup(data, rest[3..close])
+            rest = rest[close + 3..len(rest)]
+        } else {
+            close = index_of(rest, r"}}")
+            if close < 0 { return out + rest }
+            out = out + escape(lookup(data, rest[2..close]))
+            rest = rest[close + 2..len(rest)]
+        }
+    }
+}
+
+# --- signed cookies --------------------------------------------------------
+# sign(value, secret) -> "value.mac"; unsign checks the MAC and returns the
+# value, or null if it was tampered with or signed under another secret.
+fn sign(value, secret) {
+    mac = hash.hmac_sha256(secret, value)
+    value + "." + mac
+}
+
+fn unsign(signed, secret) {
+    # The MAC is a fixed 64 hex chars (HMAC-SHA256), preceded by a ".".
+    n = len(signed)
+    if n < 65 { return null }
+    if signed[n - 65] != "." { return null }
+    value = signed[0..n - 65]
+    mac = signed[n - 64..n]
+    expected = hash.hmac_sha256(secret, value)
+    if constant_eq(mac, expected) { value } else { null }
+}
+
+# A length-then-content compare that avoids returning early on the first
+# differing byte (reduces MAC timing leakage; both are fixed-length hex here).
+fn constant_eq(a, b) {
+    if len(a) != len(b) { return false }
+    mut diff = 0
+    ca = chars(a)
+    cb = chars(b)
+    for i in range(0, len(ca)) {
+        if ca[i] != cb[i] { diff = diff + 1 }
+    }
+    diff == 0
+}
+
+# cookie(name, value, opts) -> a Set-Cookie header string. opts (all optional):
+# path, max_age (seconds), http_only, secure, same_site ("Strict"|"Lax"|"None").
+fn cookie(name, value, opts) {
+    mut parts = [name + "=" + value]
+    path = get(opts, "path")
+    unless is_null(path) { parts = push(parts, "Path=" + path) }
+    max_age = get(opts, "max_age")
+    unless is_null(max_age) { parts = push(parts, "Max-Age=" + string(max_age)) }
+    if get(opts, "http_only") == true { parts = push(parts, "HttpOnly") }
+    if get(opts, "secure") == true { parts = push(parts, "Secure") }
+    same_site = get(opts, "same_site")
+    unless is_null(same_site) { parts = push(parts, "SameSite=" + same_site) }
+    join(parts, "; ")
+}
+
+# parse_cookies(header) -> a { name: value } map from a request Cookie header.
+fn parse_cookies(header) {
+    mut out = empty_map()
+    if is_null(header) { return out }
+    for pair in split(header, ";") {
+        kv = split(trim(pair), "=")
+        if len(kv) >= 2 { out = insert(out, trim(kv[0]), trim(kv[1])) }
+    }
+    out
+}
+
+# --- sessions --------------------------------------------------------------
+# A session is a signed, url-safe token. session_new mints one carrying an
+# id; session_read verifies a Cookie header and returns the id, or null.
+fn session_new(secret) {
+    id = random.token(32)
+    {
+        id: id,
+        cookie: cookie(
+            "sid",
+            sign(id, secret),
+            { path: "/", http_only: true, same_site: "Lax", max_age: 604800 },
+        ),
+    }
+}
+
+fn session_read(header, secret) {
+    cookies = parse_cookies(header)
+    raw = get(cookies, "sid")
+    if is_null(raw) { null } else { unsign(raw, secret) }
+}
+
+# --- middleware (for web.router) -------------------------------------------
+# Each returns a |req, next| function. cors adds the allow-origin header (and
+# short-circuits an OPTIONS preflight); security_headers hardens every reply.
+fn with_header(resp, key, value) {
+    h = if is_null(get(resp, "headers")) { empty_map() } else { resp.headers }
+    insert(resp, "headers", insert(h, key, value))
+}
+
+fn cors(opts) {
+    origin = if is_null(get(opts, "origin")) { "*" } else { opts.origin }
+    |req, next| {
+        if get(req, "method") == "OPTIONS" {
+            resp = { status: 204, headers: empty_map(), body: "" }
+            with_header(
+                with_header(resp, "access-control-allow-origin", origin),
+                "access-control-allow-methods",
+                "GET, POST, PUT, DELETE, OPTIONS",
+            )
+        } else { with_header(next(req), "access-control-allow-origin", origin) }
+    }
+}
+
+fn security_headers() {
+    |req, next| {
+        r = next(req)
+        a = with_header(r, "x-content-type-options", "nosniff")
+        b = with_header(a, "x-frame-options", "DENY")
+        with_header(b, "referrer-policy", "strict-origin-when-cross-origin")
+    }
+}

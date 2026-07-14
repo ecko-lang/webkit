@@ -1,0 +1,30 @@
+# webkit offline demo: templating + signed cookies + middleware, no server.
+#
+#   ecko example.ecko
+
+import std.web
+import "./main.ecko"
+
+SECRET = "demo-secret-change-me"
+
+# 1. Auto-escaping templates.
+page = main.render(
+    r"<h1>{{ title }}</h1><p>{{ note }}</p>",
+    { title: "Welcome", note: "<script>alert(1)</script> is neutralized" },
+)
+print("rendered: " + page)
+
+# 2. Signed cookies round-trip; tampering is rejected.
+signed = main.sign("user=42", SECRET)
+print("signed:   " + signed)
+print("unsign:   " + string(main.unsign(signed, SECRET)))
+print("tampered: " + string(main.unsign(replace(signed, "42", "99"), SECRET)))
+
+# 3. Middleware composed through the router (called directly, offline).
+app = web.router(
+    [web.get("/", |req| { status: 200, headers: empty_map(), body: "home" })],
+    [main.security_headers(), main.cors({ origin: "*" })],
+)
+resp = app({ method: "GET", path: "/", headers: empty_map(), params: empty_map() })
+print("CORS:     " + get(resp.headers, "access-control-allow-origin"))
+print("nosniff:  " + get(resp.headers, "x-content-type-options"))
