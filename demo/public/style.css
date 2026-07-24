@@ -1,0 +1,48 @@
+:root {
+  --ink: #101312;
+  --muted: #5a625e;
+  --paper: #fafaf7;
+  --line: #e4e4de;
+  --signal: #0a6b4f;
+  --wash: #e8f5ef;
+}
+* { box-sizing: border-box; }
+body {
+  margin: 0;
+  font: 16px/1.6 "General Sans", system-ui, -apple-system, sans-serif;
+  color: var(--ink);
+  background: var(--paper);
+}
+main { max-width: 42rem; margin: 3rem auto; padding: 0 1.25rem; }
+h1 { font-size: 1.75rem; letter-spacing: -0.01em; }
+form { display: grid; gap: 0.6rem; margin: 1.5rem 0 2rem; }
+input, textarea {
+  padding: 0.6rem 0.7rem;
+  border: 1px solid var(--line);
+  border-radius: 2px;
+  font: inherit;
+  background: #fff;
+}
+textarea { min-height: 4.5rem; resize: vertical; }
+button {
+  justify-self: start;
+  padding: 0.5rem 1.1rem;
+  border: 0;
+  border-radius: 2px;
+  background: var(--signal);
+  color: #fff;
+  font: inherit;
+  cursor: pointer;
+}
+button:hover { background: #085c44; }
+.messages { list-style: none; padding: 0; margin: 0; }
+.messages li { padding: 0.65rem 0; border-top: 1px solid var(--line); }
+.messages b { color: var(--signal); }
+.flash {
+  background: var(--wash);
+  border: 1px solid var(--signal);
+  padding: 0.5rem 0.75rem;
+  border-radius: 2px;
+  margin: 0 0 1rem;
+}
+a { color: var(--signal); }

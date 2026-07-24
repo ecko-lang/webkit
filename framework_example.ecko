@@ -1,0 +1,26 @@
+# webkit framework demo, offline (ecko example.ecko / ecko framework_example.ecko).
+import std.web
+import "./main.ecko"
+
+fn home(req) = main.html("<h1>Home</h1>")
+
+app = main.app(
+    {
+        routes: [web.get("/", home), main.static("/assets", "public")],
+        middleware: [main.cache_control([{ prefix: "/assets", value: "public, max-age=86400" }])],
+        security: true,
+        errors: insert(
+            empty_map(),
+            "404",
+            fn(req) ({ status: 404, headers: empty_map(), body: "Not found: " + req.path }),
+        ),
+    },
+)
+
+# Exercise it offline by calling the handler directly.
+home_resp = app({ method: "GET", path: "/", headers: empty_map(), params: empty_map() })
+print("GET / -> " + string(home_resp.status) + " " + get(home_resp.headers, "content-type"))
+print("secure? " + get(home_resp.headers, "x-content-type-options"))
+
+miss = app({ method: "GET", path: "/nope", headers: empty_map(), params: empty_map() })
+print("GET /nope -> " + string(miss.status) + " " + miss.body)

@@ -1,0 +1,76 @@
+# webkit/app - app assembly, blueprints, and error handling.
+
+import std.web
+import "./util.ecko"
+import "./middleware.ecko"
+
+# A plain fallback error response when no custom handler is registered.
+fn default_error_page(status) {
+    label = if status == 404 {
+        "Not Found"
+    } else if status == 500 {
+        "Internal Server Error"
+    } else {
+        "Error"
+    }
+    {
+        status: status,
+        headers: insert(empty_map(), "content-type", "text/plain; charset=utf-8"),
+        body: string(status) + " " + label,
+    }
+}
+
+# Map a caught error to a response: an http error (from abort) uses its status;
+# anything else is a bug -> 500. Uses the errors map ({ "<status>": handler }).
+fn handle_error(errors, req, e) {
+    status = if get(e, "kind") == "http" { get(e, "status") } else { 500 }
+    handler = get(errors, string(status))
+    if is_null(handler) { default_error_page(status) } else { handler(req, e) }
+}
+
+# compose_mw(handler, mw) -> handler wrapped by the middleware list, outermost
+# first. Uses reduce over the reversed list so each layer captures the next by
+# value (no mutable-loop closure trap).
+fn compose_mw(handler, mw) = reduce(reverse(mw), fn(acc, m) fn(req) m(req, acc), handler)
+
+# blueprint(prefix, routes, mw?) -> a list of routes with `prefix` prepended to
+# each path and `mw` (a list of |req,next|) wrapped around each handler.
+export fn blueprint(prefix, routes, mw = []) {
+    mut out = []
+    for r in routes {
+        mut base = insert(r, "path", string(prefix) + string(get(r, "path")))
+        h = get(r, "handler")
+        if not is_null(h) and len(mw) > 0 { base = insert(base, "handler", compose_mw(h, mw)) }
+        out = push(out, base)
+    }
+    out
+}
+
+# app(spec) -> a handler for http.serve. Wires routes + middleware + error pages.
+export fn app(spec) {
+    errors = util.get_or(spec, "errors", empty_map())
+    mut mw = []
+    if get(spec, "security") == true { mw = push(mw, middleware.security_headers()) }
+    cors_opts = get(spec, "cors")
+    unless is_null(cors_opts) { mw = push(mw, middleware.cors(cors_opts)) }
+    for m in util.get_or(spec, "middleware", []) {
+        mw = push(mw, m)
+    }
+    # Flatten one level so a blueprint (a list of routes) splices in.
+    mut flat = []
+    for r in util.get_or(spec, "routes", []) {
+        if type_of(r) == "list" {
+            for br in r {
+                flat = push(flat, br)
+            }
+        } else { flat = push(flat, r) }
+    }
+    router = web.router(flat, mw)
+    fn(req) {
+        result = try { router(req) } catch (e) { return handle_error(errors, req, e) }
+        if get(result, "status") == 404 {
+            h = get(errors, "404")
+            if is_null(h) { result } else { h(req) }
+        } else { result }
+    }
+}

@@ -1,0 +1,13 @@
+# webkit/escaping - HTML escaping for XSS-safe templates.
+
+# The five characters that matter in HTML text and quoted-attribute contexts.
+export fn escape(s) {
+    a = replace(string(s), "&", "&amp;")
+    b = replace(a, "<", "&lt;")
+    c = replace(b, ">", "&gt;")
+    d = replace(c, "\"", "&quot;")
+    replace(d, "'", "&#39;")
+}
+
+# e(s) - alias of escape(), for terse use inside native templates: {e(name)}.
+export fn e(s) = escape(s)

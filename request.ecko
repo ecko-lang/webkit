@@ -1,0 +1,78 @@
+# webkit/request - request accessors and flash messages.
+
+import std.encoding
+import "./util.ecko"
+import "./signing.ecko"
+
+export fn query(req, key, default = null) {
+    util.get_or(util.get_or(req, "params", empty_map()), key, default)
+}
+
+fn to_int_or(v, d) {
+    if is_null(v) { d } else { try { int(v) } catch (e) { d } }
+}
+
+export fn query_int(req, key, default = 0) = to_int_or(query(req, key, null), default)
+
+export fn form(req, key, default = null) {
+    util.get_or(util.get_or(req, "form", empty_map()), key, default)
+}
+
+export fn json_body(req) = get(req, "json")
+
+fn cookie_header(req) = util.get_or(util.get_or(req, "headers", empty_map()), "cookie", null)
+
+export fn cookies(req) = signing.parse_cookies(cookie_header(req))
+
+export fn session(req, secret) = signing.session_read(cookie_header(req), secret)
+
+# url_for(pattern, params?, query?) -> a URL: fills :name segments, then appends
+# a sorted, URL-encoded query string.
+export fn url_for(pattern, params = empty_map(), query = empty_map()) {
+    mut path = string(pattern)
+    for (k, v) in params {
+        path = replace(path, ":" + k, string(v))
+    }
+    mut parts = []
+    for (k, v) in query {
+        parts = push(parts, encoding.url_encode(k) + "=" + encoding.url_encode(string(v)))
+    }
+    parts = sort(parts)
+    if len(parts) > 0 { path + "?" + join(parts, "&") } else { path }
+}
+
+# Read the flash list already staged on THIS response's set-cookie (so repeated
+# flash() calls append instead of overwrite). [] if none/invalid.
+fn flash_pending(resp, secret) {
+    sc = get(util.get_or(resp, "headers", empty_map()), "set-cookie")
+    if is_null(sc) { return [] }
+    kv = split(split(sc, ";")[0], "=")
+    if len(kv) < 2 or kv[0] != "_flash" { return [] }
+    v = signing.unsign(encoding.url_decode(kv[1]), secret)
+    if is_null(v) { [] } else { json_decode(v) }
+}
+
+# flash(resp, message, secret) -> resp with `message` appended to the signed
+# _flash cookie (read on the next request with flashes()).
+export fn flash(resp, message, secret) {
+    updated = push(flash_pending(resp, secret), message)
+    signed = encoding.url_encode(signing.sign(json_encode(updated), secret))
+    util.with_header(
+        resp,
+        "set-cookie",
+        signing.cookie("_flash", signed, { path: "/", http_only: true, same_site: "Lax" }),
+    )
+}
+
+# flashes(req, secret) -> the list of flashed messages ([] if none/invalid).
+export fn flashes(req, secret) {
+    raw = get(cookies(req), "_flash")
+    if is_null(raw) { return [] }
+    v = signing.unsign(encoding.url_decode(raw), secret)
+    if is_null(v) { [] } else { json_decode(v) }
+}
+
+# clear_flash(resp) -> resp that expires the _flash cookie.
+export fn clear_flash(resp) {
+    util.with_header(resp, "set-cookie", signing.cookie("_flash", "", { path: "/", max_age: 0 }))
+}

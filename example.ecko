@@ -7,12 +7,10 @@ import "./main.ecko"
 
 SECRET = "demo-secret-change-me"
 
-# 1. Auto-escaping templates.
-page = main.render(
-    r"<h1>{{ title }}</h1><p>{{ note }}</p>",
-    { title: "Welcome", note: "<script>alert(1)</script> is neutralized" },
-)
-print("rendered: " + page)
+# 1. Native templates + explicit escaping (webkit.e on untrusted data).
+template page(title, note) = """<h1>{title}</h1><p>{note}</p>"""
+rendered = page("Welcome", main.e("<script>alert(1)</script>"))
+print("rendered: " + rendered)
 
 # 2. Signed cookies round-trip; tampering is rejected.
 signed = main.sign("user=42", SECRET)
@@ -22,7 +20,7 @@ print("tampered: " + string(main.unsign(replace(signed, "42", "99"), SECRET)))
 
 # 3. Middleware composed through the router (called directly, offline).
 app = web.router(
-    [web.get("/", |req| { status: 200, headers: empty_map(), body: "home" })],
+    [web.get("/", fn(req) ({ status: 200, headers: empty_map(), body: "home" }))],
     [main.security_headers(), main.cors({ origin: "*" })],
 )
 resp = app({ method: "GET", path: "/", headers: empty_map(), params: empty_map() })

@@ -1,0 +1,86 @@
+# webkit/responses - response builders and static file serving.
+
+import std.http
+import std.fs
+import std.web
+import "./util.ecko"
+
+# The lowercased file extension of a path, without the dot ("" if none).
+fn ext_of(path) {
+    parts = split(string(path), ".")
+    if len(parts) < 2 { "" } else { lower(last(parts)) }
+}
+
+# content_type(path) -> a MIME type string for the file's extension.
+export fn content_type(path) {
+    types = {
+        html: "text/html; charset=utf-8",
+        htm: "text/html; charset=utf-8",
+        css: "text/css; charset=utf-8",
+        js: "text/javascript; charset=utf-8",
+        mjs: "text/javascript; charset=utf-8",
+        json: "application/json",
+        xml: "application/xml",
+        txt: "text/plain; charset=utf-8",
+        md: "text/markdown; charset=utf-8",
+        svg: "image/svg+xml",
+        png: "image/png",
+        jpg: "image/jpeg",
+        jpeg: "image/jpeg",
+        gif: "image/gif",
+        webp: "image/webp",
+        ico: "image/x-icon",
+        woff: "font/woff",
+        woff2: "font/woff2",
+        wasm: "application/wasm",
+        pdf: "application/pdf",
+    }
+    util.get_or(types, ext_of(path), "application/octet-stream")
+}
+
+# file(path, opts?) -> a response serving the file FRESH (read per call), with
+# its content-type and an optional opts.cache ("cache-control"). 404 if absent.
+export fn file(path, opts = empty_map()) {
+    unless fs.exists(path) { return http.response(404, "not found") }
+    mut h = insert(empty_map(), "content-type", content_type(path))
+    c = get(opts, "cache")
+    unless is_null(c) { h = insert(h, "cache-control", c) }
+    http.response(200, fs.read_bytes(path), h)
+}
+
+# cache(resp, value) -> resp with a cache-control header.
+export fn cache(resp, value) = util.with_header(resp, "cache-control", value)
+
+# redirect(url, status?) -> a redirect response (302 by default).
+export fn redirect(url, status = 302) {
+    { status: status, headers: insert(empty_map(), "location", url), body: "" }
+}
+
+# abort(status, body?) -> raises an http error the app error layer maps to a page.
+export fn abort(status, body = "") {
+    error({ kind: "http", status: status, message: body })
+}
+
+# Response builders that also accept an opts.cache.
+export fn html(body, opts = empty_map()) {
+    r = http.html(body)
+    c = get(opts, "cache")
+    if is_null(c) { r } else { cache(r, c) }
+}
+
+export fn json(value, opts = empty_map()) {
+    r = http.json(value)
+    c = get(opts, "cache")
+    if is_null(c) { r } else { cache(r, c) }
+}
+
+export fn text(s, opts = empty_map()) {
+    r = http.text(s)
+    c = get(opts, "cache")
+    if is_null(c) { r } else { cache(r, c) }
+}
+
+# static(prefix, dir) -> a route serving `dir` under `prefix` via the hardened
+# native web.static (traversal-safe; content-types handled). Add caching with
+# cache_control middleware.
+export fn static(prefix, dir) = web.static(prefix, dir)

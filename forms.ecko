@@ -1,0 +1,47 @@
+# webkit/forms - form validation.
+
+import std.re
+import "./util.ecko"
+
+# validate_field(raw, rules) -> { value, error }: coerce by type, then apply
+# min/max (numeric for int, else length) and an optional regex pattern.
+fn validate_field(raw, rules) {
+    t = util.get_or(rules, "type", "string")
+    mut value = raw
+    mut err = null
+    if t == "int" {
+        n = try { int(raw) } catch (ex) { null }
+        if is_null(n) { err = "must be an integer" } else { value = n }
+    } else if t == "email" { unless re.test("^[^@ ]+@[^@ ]+\\.[^@ ]+$", raw) { err = "must be an email" } } else if t == "url" { unless starts_with(raw, "http://") or starts_with(raw, "https://") { err = "must be a URL" } }
+    if is_null(err) {
+        measure = if t == "int" { value } else { len(raw) }
+        mn = get(rules, "min")
+        unless is_null(mn) { if measure < mn { err = "too small" } }
+        mx = get(rules, "max")
+        if is_null(err) { unless is_null(mx) { if measure > mx { err = "too large" } } }
+        pat = get(rules, "pattern")
+        if is_null(err) {
+            unless is_null(pat) { unless re.test(pat, raw) { err = "invalid format" } }
+        }
+    }
+    { value: value, error: err }
+}
+
+# validate(form, schema) -> { valid, errors, values }.
+export fn validate(form, schema) {
+    mut errors = empty_map()
+    mut values = empty_map()
+    for (field, rules) in schema {
+        raw = get(form, field)
+        present = not is_null(raw) and string(raw) != ""
+        if get(rules, "required") == true and not present { errors = insert(errors, field, "required") } else if present {
+            checked = validate_field(string(raw), rules)
+            if is_null(get(checked, "error")) {
+                values = insert(values, field, checked.value)
+            } else {
+                errors = insert(errors, field, checked.error)
+            }
+        }
+    }
+    { valid: len(keys(errors)) == 0, errors: errors, values: values }
+}
