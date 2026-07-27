@@ -34,7 +34,9 @@ export fn validate(form, schema) {
     for (field, rules) in schema {
         raw = get(form, field)
         present = not is_null(raw) and string(raw) != ""
-        if get(rules, "required") == true and not present { errors = insert(errors, field, "required") } else if present {
+        if get(rules, "required") == true and not present {
+            errors = insert(errors, field, "required")
+        } else if present {
             checked = validate_field(string(raw), rules)
             if is_null(get(checked, "error")) {
                 values = insert(values, field, checked.value)

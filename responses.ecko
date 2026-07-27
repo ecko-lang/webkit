@@ -42,7 +42,7 @@ export fn content_type(path) {
 # its content-type and an optional opts.cache ("cache-control"). 404 if absent.
 export fn file(path, opts = empty_map()) {
     unless fs.exists(path) { return http.response(404, "not found") }
-    mut h = insert(empty_map(), "content-type", content_type(path))
+    mut h = { "content-type": content_type(path) }
     c = get(opts, "cache")
     unless is_null(c) { h = insert(h, "cache-control", c) }
     http.response(200, fs.read_bytes(path), h)
@@ -53,7 +53,7 @@ export fn cache(resp, value) = util.with_header(resp, "cache-control", value)
 
 # redirect(url, status?) -> a redirect response (302 by default).
 export fn redirect(url, status = 302) {
-    { status: status, headers: insert(empty_map(), "location", url), body: "" }
+    { status: status, headers: { location: url }, body: "" }
 }
 
 # abort(status, body?) -> raises an http error the app error layer maps to a page.
