@@ -14,7 +14,7 @@ you reach for on top of the built-in HTTP server and router:
 ## Install
 
 ```bash
-ecko get github.com/ecko-sh/webkit
+ecko get github.com/ecko-lang/webkit
 ```
 
 ## Signed cookies & sessions
@@ -83,7 +83,7 @@ http.serve(8080, app)
 
 The framework serves files and calls the built-in HTTP/router (both `net`-gated),
 so grant webkit `fs:read` **and** `net` in your app's `ecko.json`:
-`"dependencies": { "webkit": { "path": "github.com/ecko-sh/webkit", "version": "v0.9.1", "grant": ["fs:read", "net"] } }`.
+`"dependencies": { "webkit": { "path": "github.com/ecko-lang/webkit", "version": "v0.10.0", "grant": ["fs:read", "net"] } }`.
 
 ### Requests & routing
 

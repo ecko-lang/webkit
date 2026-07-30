@@ -1,5 +1,5 @@
 {
-  "module": "github.com/ecko-sh/webkit",
+  "module": "github.com/ecko-lang/webkit",
   "version": "0.10.0",
   "entrypoint": "main.ecko",
   "description": "SaaS web-app batteries for Ecko: auto-escaping HTML templates, signed cookies, sessions, and CORS/security middleware.",
