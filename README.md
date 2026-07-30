@@ -65,11 +65,16 @@ app = webkit.app({
     ],
     middleware: [webkit.cache_control([{ prefix: "/assets", value: "public, max-age=86400" }])],
     security: true,
-    errors: insert(empty_map(), "404", |req| webkit.html("<h1>Not found</h1>")),
+    errors: { "404": |req, err| webkit.html("<h1>Not found</h1>") },
 })
 http.serve(8080, app)
 ```
 
+- **Error handlers take `(req, err)`.** `errors` maps a status to a handler;
+  `err` is the caught error, or `null` when the status came from the router
+  matching no route. One handler therefore covers a status however it was
+  raised - a 404 from a missing route and a 404 from `webkit.abort(404)` reach
+  the same function with the same shape.
 - `webkit.file(path, { cache })` serves one file fresh (no read-once staleness).
 - `webkit.redirect(url)`, `webkit.abort(404)`, `webkit.json/html/text(v, { cache })`,
   `webkit.with_headers`, `webkit.cache`, `webkit.content_type`.
@@ -99,7 +104,7 @@ api = webkit.blueprint("/api", [
 app = webkit.app({ routes: [web.get("/", home), api] })
 
 # Build URLs without hardcoding:
-webkit.url_for("/user/:id", insert(empty_map(), "id", 42))   # "/user/42"
+webkit.url_for("/user/:id", { id: 42 })   # "/user/42"
 ```
 
 ### Templating & escaping
@@ -129,16 +134,17 @@ from a request, a database, or a model.
 resp = webkit.flash(webkit.redirect("/"), "Profile saved", SECRET)   # set on the response
 msgs = webkit.flashes(req, SECRET)                                   # read on the next request
 
-result = webkit.validate(req.form, insert(insert(empty_map(),
-    "email", insert(empty_map(), "type", "email")),
-    "age", insert(insert(empty_map(), "type", "int"), "min", 18)))
+result = webkit.validate(req.form, {
+    email: { type: "email" },
+    age: { type: "int", min: 18 },
+})
 # result.valid / result.errors / result.values
 ```
 
 ## Testing
 
 ```bash
-ecko test          # offline: escaping, cookies, sessions, flash, validation, middleware, framework (41 cases)
+ecko test # offline: escaping, cookies, sessions, flash, validation, middleware, framework (41 cases)
 ```
 
 ## License

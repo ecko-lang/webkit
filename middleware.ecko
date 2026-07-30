@@ -4,8 +4,13 @@
 import "./util.ecko"
 import "./responses.ecko"
 
-# cache_control(rules) -> middleware that sets cache-control on the response for
-# the first rule whose prefix matches req.path. rules: [{ prefix, value }].
+## cache_control(rules) -> middleware setting cache-control by path prefix.
+##
+## `rules` is `[{ prefix, value }]` and the first matching prefix wins, so order
+## from most specific to least.
+##
+## example:
+##   cache_control([{ prefix: "/assets", value: "public, max-age=31536000" }])
 export fn cache_control(rules) {
     fn(req, next) {
         resp = next(req)
@@ -22,7 +27,11 @@ export fn cache_control(rules) {
     }
 }
 
-# cors adds the allow-origin header (and short-circuits an OPTIONS preflight).
+## cors(opts) -> middleware adding access-control headers and answering preflight.
+##
+## `opts.origin` defaults to `"*"`, which is right for a public API and wrong for
+## anything using cookies - a browser refuses credentialed requests to a wildcard
+## origin. An OPTIONS request is answered 204 without reaching your routes.
 export fn cors(opts) {
     origin = if is_null(get(opts, "origin")) { "*" } else { opts.origin }
     fn(req, next) {
@@ -37,7 +46,11 @@ export fn cors(opts) {
     }
 }
 
-# security_headers hardens every reply (nosniff, DENY framing, referrer policy).
+## security_headers() -> middleware hardening every response.
+##
+## Sets `nosniff`, `X-Frame-Options: DENY` and a strict-origin referrer policy.
+## Framing is denied outright, so if the page must be embedded, set your own
+## frame policy instead of using this.
 export fn security_headers() {
     fn(req, next) {
         r = next(req)

@@ -1,6 +1,11 @@
 # webkit/escaping - HTML escaping for XSS-safe templates.
 
-# The five characters that matter in HTML text and quoted-attribute contexts.
+## escape(s) -> `s` with the five HTML-significant characters replaced.
+##
+## `&`, `<`, `>`, `"` and `'` become entities, which makes the result safe in
+## element text and in quoted attribute values. It is not safe unquoted, nor
+## inside a `<script>` or `<style>` body, nor in a URL - those need their own
+## encoding.
 export fn escape(s) {
     a = replace(string(s), "&", "&amp;")
     b = replace(a, "<", "&lt;")
@@ -9,5 +14,8 @@ export fn escape(s) {
     replace(d, "'", "&#39;")
 }
 
-# e(s) - alias of escape(), for terse use inside native templates: {e(name)}.
+## e(s) -> the same as `escape`, named short for use inside templates.
+##
+## example:
+##   html("<p>Hello, {e(name)}</p>")
 export fn e(s) = escape(s)

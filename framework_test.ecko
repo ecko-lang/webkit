@@ -26,7 +26,7 @@ test.case("file 404s a missing path", fn() {
 })
 
 test.case("with_headers merges headers onto a response", fn() {
-    extra = insert(insert(empty_map(), "x-a", "1"), "x-b", "2")
+    extra = { "x-a": "1", "x-b": "2" }
     r = main.with_headers({ status: 200, headers: empty_map(), body: "x" }, extra)
     test.eq(get(r.headers, "x-a"), "1")
     test.eq(get(r.headers, "x-b"), "2")
@@ -84,11 +84,9 @@ test.case("app maps a router 404 to a custom error page", fn() {
     a = main.app(
         {
             routes: [web.get("/", fn(req) main.text("home"))],
-            errors: insert(
-                empty_map(),
-                "404",
-                fn(req) ({ status: 404, headers: empty_map(), body: "custom missing" }),
-            ),
+            errors: {
+                "404": fn(req, err) ({ status: 404, headers: empty_map(), body: "custom missing" }),
+            },
         },
     )
     r = a({ method: "GET", path: "/nope", headers: empty_map(), params: empty_map() })
@@ -100,16 +98,64 @@ test.case("abort inside a handler routes to that status page", fn() {
     a = main.app(
         {
             routes: [web.get("/secret", fn(req) main.abort(403, "no"))],
-            errors: insert(
-                empty_map(),
-                "403",
-                fn(req, e) ({ status: 403, headers: empty_map(), body: "forbidden" }),
-            ),
+            errors: {
+                "403": fn(req, e) ({ status: 403, headers: empty_map(), body: "forbidden" }),
+            },
         },
     )
     r = a({ method: "GET", path: "/secret", headers: empty_map(), params: empty_map() })
     test.eq(r.status, 403)
     test.eq(r.body, "forbidden")
+})
+
+test.case("one error handler serves a status however it is raised", fn() {
+    # A 404 reaches the error layer two ways: the router matching nothing, and a
+    # handler calling abort(404). Both must invoke the registered handler the
+    # same way, or a handler written for one path breaks on the other.
+    a = main.app(
+        {
+            routes: [
+                web.get("/", fn(req) main.text("home")),
+                web.get("/gone", fn(req) main.abort(404, "gone")),
+            ],
+            errors: {
+                "404": fn(req, err) ({ status: 404, headers: empty_map(), body: "missing" }),
+            },
+        },
+    )
+    miss = a({ method: "GET", path: "/nope", headers: empty_map(), params: empty_map() })
+    test.eq(miss.status, 404)
+    test.eq(miss.body, "missing")
+
+    aborted = a({ method: "GET", path: "/gone", headers: empty_map(), params: empty_map() })
+    test.eq(aborted.status, 404)
+    test.eq(aborted.body, "missing")
+})
+
+test.case("an error handler is given the error that caused it", fn() {
+    a = main.app(
+        {
+            routes: [web.get("/secret", fn(req) main.abort(403, "no peeking"))],
+            errors: {
+                "403": fn(req, err) ({ status: 403, headers: empty_map(), body: if is_null(err) { "no error" } else { "saw: " + string(get(err, "kind")) } }),
+            },
+        },
+    )
+    r = a({ method: "GET", path: "/secret", headers: empty_map(), params: empty_map() })
+    test.eq(r.body, "saw: http")
+})
+
+test.case("a route miss passes a null error, not a missing argument", fn() {
+    a = main.app(
+        {
+            routes: [web.get("/", fn(req) main.text("home"))],
+            errors: {
+                "404": fn(req, err) ({ status: 404, headers: empty_map(), body: if is_null(err) { "null error" } else { "unexpected error" } }),
+            },
+        },
+    )
+    r = a({ method: "GET", path: "/nope", headers: empty_map(), params: empty_map() })
+    test.eq(r.body, "null error")
 })
 
 test.case("a thrown bug becomes a 500", fn() {
@@ -128,26 +174,26 @@ test.case("security + cors options add middleware", fn() {
 })
 
 test.case("query reads a parsed query param with a default", fn() {
-    req = { params: insert(empty_map(), "q", "hi"), form: empty_map(), headers: empty_map() }
+    req = { params: { q: "hi" }, form: empty_map(), headers: empty_map() }
     test.eq(main.query(req, "q"), "hi")
     test.eq(main.query(req, "missing", "d"), "d")
 })
 
 test.case("query_int parses or falls back", fn() {
-    req = { params: insert(insert(empty_map(), "n", "42"), "bad", "x"), headers: empty_map() }
+    req = { params: { n: "42", bad: "x" }, headers: empty_map() }
     test.eq(main.query_int(req, "n"), 42)
     test.eq(main.query_int(req, "bad", -1), -1)
     test.eq(main.query_int(req, "absent", 7), 7)
 })
 
 test.case("form reads a form field with a default", fn() {
-    req = { form: insert(empty_map(), "email", "a@b.c"), params: empty_map(), headers: empty_map() }
+    req = { form: { email: "a@b.c" }, params: empty_map(), headers: empty_map() }
     test.eq(main.form(req, "email"), "a@b.c")
     test.eq(main.form(req, "nope", ""), "")
 })
 
 test.case("cookies parses the request Cookie header", fn() {
-    req = { headers: insert(empty_map(), "cookie", "sid=abc; theme=dark") }
+    req = { headers: { cookie: "sid=abc; theme=dark" } }
     c = main.cookies(req)
     test.eq(get(c, "sid"), "abc")
     test.eq(get(c, "theme"), "dark")
@@ -155,7 +201,7 @@ test.case("cookies parses the request Cookie header", fn() {
 
 test.case("session reads a signed sid cookie", fn() {
     signed = main.sign("user9", "sek")
-    req = { headers: insert(empty_map(), "cookie", "sid=" + signed) }
+    req = { headers: { cookie: "sid=" + signed } }
     test.eq(main.session(req, "sek"), "user9")
     test.eq(main.session({ headers: empty_map() }, "sek"), null)
 })
@@ -191,11 +237,11 @@ test.case("app dispatches a blueprint's prefixed routes", fn() {
 })
 
 test.case("url_for fills path params", fn() {
-    test.eq(main.url_for("/user/:id", insert(empty_map(), "id", 5)), "/user/5")
+    test.eq(main.url_for("/user/:id", { id: 5 }), "/user/5")
 })
 
 test.case("url_for appends a sorted, encoded query", fn() {
-    q = insert(insert(empty_map(), "b", "2"), "a", "x y")
+    q = { b: "2", a: "x y" }
     test.eq(main.url_for("/s", empty_map(), q), "/s?a=x%20y&b=2")
 })
 
@@ -207,7 +253,7 @@ test.case("flash then flashes round-trips messages in order", fn() {
     r1 = main.flash({ status: 200, headers: empty_map(), body: "" }, "Saved!", "sek")
     r2 = main.flash(r1, "And again", "sek")
     val = split(split(get(r2.headers, "set-cookie"), ";")[0], "=")[1]
-    req = { headers: insert(empty_map(), "cookie", "_flash=" + val) }
+    req = { headers: { cookie: "_flash=" + val } }
     test.eq(main.flashes(req, "sek"), ["Saved!", "And again"])
 })
 
@@ -215,7 +261,7 @@ test.case("flashes is empty with no cookie or a bad secret", fn() {
     test.eq(main.flashes({ headers: empty_map() }, "sek"), [])
     r = main.flash({ status: 200, headers: empty_map(), body: "" }, "x", "sek")
     val = split(split(get(r.headers, "set-cookie"), ";")[0], "=")[1]
-    req = { headers: insert(empty_map(), "cookie", "_flash=" + val) }
+    req = { headers: { cookie: "_flash=" + val } }
     test.eq(main.flashes(req, "wrong"), [])
 })
 
@@ -225,23 +271,23 @@ test.case("clear_flash expires the cookie", fn() {
 })
 
 test.case("validate flags a missing required field", fn() {
-    schema = insert(empty_map(), "email", insert(empty_map(), "required", true))
+    schema = { email: { required: true } }
     r = main.validate(empty_map(), schema)
     test.eq(r.valid, false)
     test.eq(get(r.errors, "email"), "required")
 })
 
 test.case("validate coerces an int and enforces min", fn() {
-    schema = insert(empty_map(), "age", insert(insert(empty_map(), "type", "int"), "min", 18))
-    ok = main.validate(insert(empty_map(), "age", "21"), schema)
+    schema = { age: { type: "int", min: 18 } }
+    ok = main.validate({ age: "21" }, schema)
     test.eq(ok.valid, true)
     test.eq(get(ok.values, "age"), 21)
-    test.eq(main.validate(insert(empty_map(), "age", "5"), schema).valid, false)
-    test.eq(main.validate(insert(empty_map(), "age", "x"), schema).valid, false)
+    test.eq(main.validate({ age: "5" }, schema).valid, false)
+    test.eq(main.validate({ age: "x" }, schema).valid, false)
 })
 
 test.case("validate checks email format", fn() {
-    schema = insert(empty_map(), "email", insert(empty_map(), "type", "email"))
-    test.eq(main.validate(insert(empty_map(), "email", "a@b.co"), schema).valid, true)
-    test.eq(main.validate(insert(empty_map(), "email", "nope"), schema).valid, false)
+    schema = { email: { type: "email" } }
+    test.eq(main.validate({ email: "a@b.co" }, schema).valid, true)
+    test.eq(main.validate({ email: "nope" }, schema).valid, false)
 })

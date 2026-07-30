@@ -11,7 +11,10 @@ fn ext_of(path) {
     if len(parts) < 2 { "" } else { lower(last(parts)) }
 }
 
-# content_type(path) -> a MIME type string for the file's extension.
+## content_type(path) -> a MIME type for the file's extension.
+##
+## Covers the web's common types and falls back to
+## `application/octet-stream`, which browsers download rather than render.
 export fn content_type(path) {
     types = {
         html: "text/html; charset=utf-8",
@@ -38,8 +41,11 @@ export fn content_type(path) {
     util.get_or(types, ext_of(path), "application/octet-stream")
 }
 
-# file(path, opts?) -> a response serving the file FRESH (read per call), with
-# its content-type and an optional opts.cache ("cache-control"). 404 if absent.
+## file(path, opts?) -> a response serving `path`, or a 404 if it is missing.
+##
+## The file is read on every call, so edits show up without a restart; that also
+## means it is not free. `opts.cache` sets cache-control. For a whole directory
+## use `static`, which is traversal-safe.
 export fn file(path, opts = empty_map()) {
     unless fs.exists(path) { return http.response(404, "not found") }
     mut h = { "content-type": content_type(path) }
@@ -48,39 +54,54 @@ export fn file(path, opts = empty_map()) {
     http.response(200, fs.read_bytes(path), h)
 }
 
-# cache(resp, value) -> resp with a cache-control header.
+## cache(resp, value) -> `resp` with a cache-control header.
 export fn cache(resp, value) = util.with_header(resp, "cache-control", value)
 
-# redirect(url, status?) -> a redirect response (302 by default).
+## redirect(url, status?) -> a redirect response, 302 by default.
+##
+## Use 301 or 308 only when the move is permanent - browsers cache those hard
+## enough that a mistake outlives the fix.
 export fn redirect(url, status = 302) {
     { status: status, headers: { location: url }, body: "" }
 }
 
-# abort(status, body?) -> raises an http error the app error layer maps to a page.
+## abort(status, body?) -> raises an error the app's error layer turns into a page.
+##
+## This is how a handler gives up mid-request: `abort(404)` from three calls deep
+## reaches the registered 404 handler without every caller checking a return.
+##
+## example:
+##   post = find(id) ; if post == null { abort(404) }
 export fn abort(status, body = "") {
     error({ kind: "http", status: status, message: body })
 }
 
-# Response builders that also accept an opts.cache.
+## html(body, opts?) -> an HTML response. `opts.cache` sets cache-control.
+##
+## The body is sent as given, so escape anything user-supplied with `e`.
 export fn html(body, opts = empty_map()) {
     r = http.html(body)
     c = get(opts, "cache")
     if is_null(c) { r } else { cache(r, c) }
 }
 
+## json(value, opts?) -> a JSON response. `opts.cache` sets cache-control.
 export fn json(value, opts = empty_map()) {
     r = http.json(value)
     c = get(opts, "cache")
     if is_null(c) { r } else { cache(r, c) }
 }
 
+## text(s, opts?) -> a plain-text response. `opts.cache` sets cache-control.
 export fn text(s, opts = empty_map()) {
     r = http.text(s)
     c = get(opts, "cache")
     if is_null(c) { r } else { cache(r, c) }
 }
 
-# static(prefix, dir) -> a route serving `dir` under `prefix` via the hardened
-# native web.static (traversal-safe; content-types handled). Add caching with
-# cache_control middleware.
+## static(prefix, dir) -> a route serving `dir` under `prefix`.
+##
+## Delegates to the native `web.static`, which resolves paths safely: `..` in a
+## request cannot escape `dir`. Add caching with the `cache_control`
+## middleware.
 export fn static(prefix, dir) = web.static(prefix, dir)

@@ -27,7 +27,18 @@ fn validate_field(raw, rules) {
     { value: value, error: err }
 }
 
-# validate(form, schema) -> { valid, errors, values }.
+## validate(form, schema) -> { valid, errors, values }.
+##
+## Each field's rules are `{ required, type, min, max, pattern }`, where `type`
+## is "string" (default), "int", "email" or "url". `min`/`max` compare the number
+## for an int and the length for anything else.
+##
+## `values` holds only the fields that passed, coerced to their type, so an int
+## field arrives as an int rather than as text.
+##
+## example:
+##   r = validate(req.form, { email: { required: true, type: "email" } })
+##   if not r.valid { return html(form_with(r.errors)) }
 export fn validate(form, schema) {
     mut errors = empty_map()
     mut values = empty_map()

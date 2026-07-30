@@ -12,7 +12,7 @@ app = main.app(
         errors: insert(
             empty_map(),
             "404",
-            fn(req) ({ status: 404, headers: empty_map(), body: "Not found: " + req.path }),
+            fn(req, err) ({ status: 404, headers: empty_map(), body: "Not found: " + req.path }),
         ),
     },
 )

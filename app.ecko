@@ -15,13 +15,16 @@ fn default_error_page(status) {
     }
     {
         status: status,
-        headers: insert(empty_map(), "content-type", "text/plain; charset=utf-8"),
+        headers: { "content-type": "text/plain; charset=utf-8" },
         body: string(status) + " " + label,
     }
 }
 
 # Map a caught error to a response: an http error (from abort) uses its status;
 # anything else is a bug -> 500. Uses the errors map ({ "<status>": handler }).
+#
+# Every error handler is called as `handler(req, err)`. `err` is the caught
+# error, or null when the status came from the router finding no route.
 fn handle_error(errors, req, e) {
     status = if get(e, "kind") == "http" { get(e, "status") } else { 500 }
     handler = get(errors, string(status))
@@ -33,8 +36,11 @@ fn handle_error(errors, req, e) {
 # value (no mutable-loop closure trap).
 fn compose_mw(handler, mw) = reduce(reverse(mw), fn(acc, m) fn(req) m(req, acc), handler)
 
-# blueprint(prefix, routes, mw?) -> a list of routes with `prefix` prepended to
-# each path and `mw` (a list of |req,next|) wrapped around each handler.
+## blueprint(prefix, routes, mw?) -> `routes` with `prefix` on each path.
+##
+## Middleware in `mw` wraps only these routes, which is how a section of the site
+## gets, say, authentication without the rest paying for it. Pass the result
+## straight into an app's `routes` and it splices in.
 export fn blueprint(prefix, routes, mw = []) {
     mut out = []
     for r in routes {
@@ -46,7 +52,19 @@ export fn blueprint(prefix, routes, mw = []) {
     out
 }
 
-# app(spec) -> a handler for http.serve. Wires routes + middleware + error pages.
+## app(spec) -> a request handler for `http.serve`.
+##
+## `spec` is `{ routes, middleware, errors, security, cors }`. Middleware runs
+## outermost-first in the order given, after `security` and `cors` if those are
+## set. `errors` maps a status as text to a handler, so `{ "404": page }`.
+##
+## Every error handler is called as `handler(req, err)`. `err` is null when the
+## router simply found no route, so one 404 handler serves both that case and
+## an explicit `abort(404)`.
+##
+## example:
+##   handler = app({ routes: [...], security: true, errors: { "404": not_found } })
+##   http.serve(8080, handler)
 export fn app(spec) {
     errors = util.get_or(spec, "errors", empty_map())
     mut mw = []
@@ -70,7 +88,12 @@ export fn app(spec) {
         result = try { router(req) } catch (e) { return handle_error(errors, req, e) }
         if get(result, "status") == 404 {
             h = get(errors, "404")
-            if is_null(h) { result } else { h(req) }
+            # `null` for the error: a route simply not matching is not a thrown
+            # error. It is still passed, so one handler works whether the 404
+            # came from the router or from abort(404) - the two used to call
+            # handlers with different arity, and a handler written for one
+            # crashed on the other.
+            if is_null(h) { result } else { h(req, null) }
         } else { result }
     }
 }

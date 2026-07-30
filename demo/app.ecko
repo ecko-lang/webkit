@@ -91,14 +91,15 @@ fn api_messages(_req) {
 
 api = main.blueprint("/api", [web.get("/messages", api_messages)])
 
-# Custom 404 (rendered through the same layout).
-fn not_found(_req) = main.with_headers(
+# Custom 404 (rendered through the same layout). Error handlers take
+# (req, err); err is null when the router simply matched nothing, as here.
+fn not_found(_req, _err) = main.with_headers(
     {
         status: 404,
         headers: empty_map(),
         body: layout("Not found", "<p>No such page. <a href=\"/\">&larr; Home</a></p>"),
     },
-    insert(empty_map(), "content-type", "text/html; charset=utf-8"),
+    { "content-type": "text/html; charset=utf-8" },
 )
 
 # --- assembly --------------------------------------------------------------
@@ -114,7 +115,7 @@ app = main.app(
         ],
         middleware: [main.cache_control([{ prefix: "/static", value: "public, max-age=86400" }])],
         security: true,
-        errors: insert(empty_map(), "404", not_found),
+        errors: { "404": not_found },
     },
 )
 
