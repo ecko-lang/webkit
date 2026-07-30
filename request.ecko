@@ -1,0 +1,103 @@
+# webkit/request - request accessors and flash messages.
+
+import std.encoding
+import "./util.ecko"
+import "./signing.ecko"
+
+## query(req, key, default?) -> a query-string or path parameter as text.
+##
+## `default` (null unless given) is returned when the key is absent.
+export fn query(req, key, default = null) {
+    util.get_or(util.get_or(req, "params", empty_map()), key, default)
+}
+
+fn to_int_or(v, d) {
+    if is_null(v) { d } else { try { int(v) } catch (e) { d } }
+}
+
+## query_int(req, key, default?) -> a query parameter as a whole number.
+##
+## Absent or unparseable both give `default` (0 unless given), so `?page=abc`
+## cannot crash a handler.
+export fn query_int(req, key, default = 0) = to_int_or(query(req, key, null), default)
+
+## form(req, key, default?) -> a submitted form field as text.
+export fn form(req, key, default = null) {
+    util.get_or(util.get_or(req, "form", empty_map()), key, default)
+}
+
+## json_body(req) -> the decoded JSON body, or null when there was none.
+export fn json_body(req) = get(req, "json")
+
+fn cookie_header(req) = util.get_or(util.get_or(req, "headers", empty_map()), "cookie", null)
+
+## cookies(req) -> a { name: value } map of the request's cookies.
+##
+## These are raw and unverified. For a signed value use `session` or `flashes`.
+export fn cookies(req) = signing.parse_cookies(cookie_header(req))
+
+## session(req, secret) -> the verified session id, or null.
+export fn session(req, secret) = signing.session_read(cookie_header(req), secret)
+
+## url_for(pattern, params?, query?) -> a URL built from a route pattern.
+##
+## `:name` segments are filled from `params`; `query` is appended sorted and
+## percent-encoded, so the same inputs always produce the same URL.
+##
+## example:
+##   url_for("/posts/:id", { id: 7 }, { page: 2 })   # "/posts/7?page=2"
+export fn url_for(pattern, params = empty_map(), query = empty_map()) {
+    mut path = string(pattern)
+    for (k, v) in params {
+        path = replace(path, ":" + k, string(v))
+    }
+    mut parts = []
+    for (k, v) in query {
+        parts = push(parts, encoding.url_encode(k) + "=" + encoding.url_encode(string(v)))
+    }
+    parts = sort(parts)
+    if len(parts) > 0 { path + "?" + join(parts, "&") } else { path }
+}
+
+# Read the flash list already staged on THIS response's set-cookie (so repeated
+# flash() calls append instead of overwrite). [] if none/invalid.
+fn flash_pending(resp, secret) {
+    sc = get(util.get_or(resp, "headers", empty_map()), "set-cookie")
+    if is_null(sc) { return [] }
+    kv = split(split(sc, ";")[0], "=")
+    if len(kv) < 2 or kv[0] != "_flash" { return [] }
+    v = signing.unsign(encoding.url_decode(kv[1]), secret)
+    if is_null(v) { [] } else { json_decode(v) }
+}
+
+## flash(resp, message, secret) -> `resp` carrying `message` to the next request.
+##
+## Messages accumulate: calling it twice on one response stages both. Read them
+## with `flashes` and clear them with `clear_flash`, or they show up again.
+export fn flash(resp, message, secret) {
+    updated = push(flash_pending(resp, secret), message)
+    signed = encoding.url_encode(signing.sign(json_encode(updated), secret))
+    util.with_header(
+        resp,
+        "set-cookie",
+        signing.cookie("_flash", signed, { path: "/", http_only: true, same_site: "Lax" }),
+    )
+}
+
+## flashes(req, secret) -> the messages staged by the previous response.
+##
+## An empty list when there are none, or when the cookie fails to verify.
+export fn flashes(req, secret) {
+    raw = get(cookies(req), "_flash")
+    if is_null(raw) { return [] }
+    v = signing.unsign(encoding.url_decode(raw), secret)
+    if is_null(v) { [] } else { json_decode(v) }
+}
+
+## clear_flash(resp) -> `resp` expiring the flash cookie.
+##
+## Do this on the response that displays the messages, otherwise the next page
+## shows them again.
+export fn clear_flash(resp) {
+    util.with_header(resp, "set-cookie", signing.cookie("_flash", "", { path: "/", max_age: 0 }))
+}

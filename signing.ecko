@@ -1,0 +1,108 @@
+# webkit/signing - HMAC-signed cookies and sessions.
+
+import std.hash
+import std.random
+
+## sign(value, secret) -> "value.mac", the value with an HMAC-SHA256 appended.
+##
+## The value is readable by anyone holding the cookie - signing proves it was
+## not altered, it does not hide it. Do not sign anything you would not show the
+## user.
+export fn sign(value, secret) {
+    mac = hash.hmac_sha256(secret, value)
+    value + "." + mac
+}
+
+## unsign(signed, secret) -> the original value, or null if it does not verify.
+##
+## Null covers every failure the same way: tampered value, wrong secret,
+## truncated token, or not a signed string at all. The MAC comparison does not
+## stop at the first differing character, so it does not leak how much of a
+## forged MAC was correct.
+export fn unsign(signed, secret) {
+    # The MAC is a fixed 64 hex chars (HMAC-SHA256), preceded by a ".".
+    n = len(signed)
+    if n < 65 { return null }
+    if signed[n - 65] != "." { return null }
+    value = signed[0..n - 65]
+    mac = signed[n - 64..n]
+    expected = hash.hmac_sha256(secret, value)
+    if constant_eq(mac, expected) { value } else { null }
+}
+
+# A length-then-content compare that avoids returning early on the first
+# differing byte (reduces MAC timing leakage; both are fixed-length hex here).
+fn constant_eq(a, b) {
+    if len(a) != len(b) { return false }
+    mut diff = 0
+    ca = chars(a)
+    cb = chars(b)
+    for i in range(0, len(ca)) {
+        if ca[i] != cb[i] { diff = diff + 1 }
+    }
+    diff == 0
+}
+
+## cookie(name, value, opts) -> a Set-Cookie header string.
+##
+## `opts` is all optional: `path`, `max_age` in seconds, `http_only`, `secure`,
+## and `same_site` ("Strict", "Lax" or "None"). Nothing is set by default, so
+## for a session cookie pass `http_only` and, over HTTPS, `secure`.
+##
+## example:
+##   cookie("sid", tok, { path: "/", http_only: true, same_site: "Lax" })
+export fn cookie(name, value, opts) {
+    mut parts = [name + "=" + value]
+    path = get(opts, "path")
+    unless is_null(path) { parts = push(parts, "Path=" + path) }
+    max_age = get(opts, "max_age")
+    unless is_null(max_age) { parts = push(parts, "Max-Age=" + string(max_age)) }
+    if get(opts, "http_only") == true { parts = push(parts, "HttpOnly") }
+    if get(opts, "secure") == true { parts = push(parts, "Secure") }
+    same_site = get(opts, "same_site")
+    unless is_null(same_site) { parts = push(parts, "SameSite=" + same_site) }
+    join(parts, "; ")
+}
+
+## parse_cookies(header) -> a { name: value } map from a request Cookie header.
+##
+## An empty map for a null or unparseable header.
+export fn parse_cookies(header) {
+    mut out = empty_map()
+    if is_null(header) { return out }
+    for pair in split(header, ";") {
+        kv = split(trim(pair), "=")
+        if len(kv) >= 2 { out = insert(out, trim(kv[0]), trim(kv[1])) }
+    }
+    out
+}
+
+## session_new(secret) -> { id, cookie } for a fresh session.
+##
+## `id` is a 32-byte random token to key your own store by; `cookie` is the
+## Set-Cookie header carrying it signed, HttpOnly, SameSite=Lax, for a week.
+##
+## example:
+##   s = session_new(secret)
+##   with_headers(redirect("/"), { "set-cookie": s.cookie })
+export fn session_new(secret) {
+    id = random.token(32)
+    {
+        id: id,
+        cookie: cookie(
+            "sid",
+            sign(id, secret),
+            { path: "/", http_only: true, same_site: "Lax", max_age: 604800 },
+        ),
+    }
+}
+
+## session_read(header, secret) -> the session id from a Cookie header, or null.
+##
+## Null means no session, not a forged one - a tampered cookie reads the same as
+## an absent one, which is what you want at a route boundary.
+export fn session_read(header, secret) {
+    parsed = parse_cookies(header)
+    raw = get(parsed, "sid")
+    if is_null(raw) { null } else { unsign(raw, secret) }
+}

@@ -1,0 +1,31 @@
+# webkit/util - shared internal helpers used across the package.
+#
+# These are package-internal (only with_headers is part of the public surface);
+# other modules reach them as util.get_or / util.with_header.
+
+## get_or(m, k, d) -> `m[k]`, or `d` when the key is absent or null.
+##
+## Package-internal: it is not re-exported from the entrypoint.
+export fn get_or(m, k, d) {
+    v = get(m, k)
+    if is_null(v) { d } else { v }
+}
+
+## with_header(resp, key, value) -> `resp` with one header set.
+##
+## Package-internal: it is not re-exported from the entrypoint.
+export fn with_header(resp, key, value) {
+    h = if is_null(get(resp, "headers")) { empty_map() } else { resp.headers }
+    insert(resp, "headers", insert(h, key, value))
+}
+
+## with_headers(resp, hmap) -> `resp` with every name/value merged into headers.
+##
+## Existing headers are kept unless `hmap` names them.
+export fn with_headers(resp, hmap) {
+    mut h = if is_null(get(resp, "headers")) { empty_map() } else { resp.headers }
+    for (k, v) in hmap {
+        h = insert(h, k, v)
+    }
+    insert(resp, "headers", h)
+}

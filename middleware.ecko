@@ -1,0 +1,61 @@
+# webkit/middleware - CORS, security-header, and cache-control middleware for
+# web.router. Each returns a |req, next| function.
+
+import "./util.ecko"
+import "./responses.ecko"
+
+## cache_control(rules) -> middleware setting cache-control by path prefix.
+##
+## `rules` is `[{ prefix, value }]` and the first matching prefix wins, so order
+## from most specific to least.
+##
+## example:
+##   cache_control([{ prefix: "/assets", value: "public, max-age=31536000" }])
+export fn cache_control(rules) {
+    fn(req, next) {
+        resp = next(req)
+        path = string(get(req, "path"))
+        mut out = resp
+        mut done = false
+        for rule in rules {
+            if not done and starts_with(path, rule.prefix) {
+                out = responses.cache(resp, rule.value)
+                done = true
+            }
+        }
+        out
+    }
+}
+
+## cors(opts) -> middleware adding access-control headers and answering preflight.
+##
+## `opts.origin` defaults to `"*"`, which is right for a public API and wrong for
+## anything using cookies - a browser refuses credentialed requests to a wildcard
+## origin. An OPTIONS request is answered 204 without reaching your routes.
+export fn cors(opts) {
+    origin = if is_null(get(opts, "origin")) { "*" } else { opts.origin }
+    fn(req, next) {
+        if get(req, "method") == "OPTIONS" {
+            resp = { status: 204, headers: empty_map(), body: "" }
+            util.with_header(
+                util.with_header(resp, "access-control-allow-origin", origin),
+                "access-control-allow-methods",
+                "GET, POST, PUT, DELETE, OPTIONS",
+            )
+        } else { util.with_header(next(req), "access-control-allow-origin", origin) }
+    }
+}
+
+## security_headers() -> middleware hardening every response.
+##
+## Sets `nosniff`, `X-Frame-Options: DENY` and a strict-origin referrer policy.
+## Framing is denied outright, so if the page must be embedded, set your own
+## frame policy instead of using this.
+export fn security_headers() {
+    fn(req, next) {
+        r = next(req)
+        a = util.with_header(r, "x-content-type-options", "nosniff")
+        b = util.with_header(a, "x-frame-options", "DENY")
+        util.with_header(b, "referrer-policy", "strict-origin-when-cross-origin")
+    }
+}

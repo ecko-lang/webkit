@@ -1,0 +1,293 @@
+# Offline tests for the webkit framework core (ecko test).
+import std.test
+import std.fs
+import std.web
+import "./main.ecko"
+
+test.case("content_type maps by extension", fn() {
+    test.eq(main.content_type("a/b/index.html"), "text/html; charset=utf-8")
+    test.eq(main.content_type("style.css"), "text/css; charset=utf-8")
+    test.eq(main.content_type("app.js"), "text/javascript; charset=utf-8")
+    test.eq(main.content_type("logo.svg"), "image/svg+xml")
+    test.eq(main.content_type("data"), "application/octet-stream")
+})
+
+test.case("file serves an existing file with content-type + cache", fn() {
+    path = "/tmp/webkit_t1.html"
+    fs.write(path, "<h1>hi</h1>")
+    r = main.file(path, { cache: "public, max-age=60" })
+    test.eq(r.status, 200)
+    test.eq(get(r.headers, "content-type"), "text/html; charset=utf-8")
+    test.eq(get(r.headers, "cache-control"), "public, max-age=60")
+})
+
+test.case("file 404s a missing path", fn() {
+    test.eq(main.file("/tmp/does-not-exist-xyz.html").status, 404)
+})
+
+test.case("with_headers merges headers onto a response", fn() {
+    extra = { "x-a": "1", "x-b": "2" }
+    r = main.with_headers({ status: 200, headers: empty_map(), body: "x" }, extra)
+    test.eq(get(r.headers, "x-a"), "1")
+    test.eq(get(r.headers, "x-b"), "2")
+})
+
+test.case("cache sets cache-control", fn() {
+    r = main.cache({ status: 200, headers: empty_map(), body: "x" }, "public, max-age=30")
+    test.eq(get(r.headers, "cache-control"), "public, max-age=30")
+})
+
+test.case("redirect builds a 302 with a location header", fn() {
+    r = main.redirect("/login")
+    test.eq(r.status, 302)
+    test.eq(get(r.headers, "location"), "/login")
+})
+
+test.case("html honors an opts.cache", fn() {
+    r = main.html("<p>hi</p>", { cache: "no-store" })
+    test.eq(r.status, 200)
+    test.eq(get(r.headers, "content-type"), "text/html; charset=utf-8")
+    test.eq(get(r.headers, "cache-control"), "no-store")
+})
+
+test.case("abort raises a structured http error", fn() {
+    caught = try {
+        main.abort(404, "nope")
+        "no-error"
+    } catch (e) { get(e, "kind") + ":" + string(get(e, "status")) }
+    test.eq(caught, "http:404")
+})
+
+test.case("static returns a GET route for the prefix", fn() {
+    r = main.static("/assets", "public")
+    test.eq(get(r, "method"), "GET")
+    test.eq(get(r, "path"), "/assets")
+})
+
+test.case("cache_control middleware stamps cache-control by path prefix", fn() {
+    mw = main.cache_control([{ prefix: "/assets", value: "public, max-age=86400" }])
+    next = fn(req) ({ status: 200, headers: empty_map(), body: "x" })
+    hit = mw({ method: "GET", path: "/assets/logo.png", headers: empty_map() }, next)
+    miss = mw({ method: "GET", path: "/", headers: empty_map() }, next)
+    test.eq(get(hit.headers, "cache-control"), "public, max-age=86400")
+    test.eq(get(miss.headers, "cache-control"), null)
+})
+
+test.case("app routes a request through web.router", fn() {
+    a = main.app({ routes: [web.get("/", fn(req) main.text("home"))] })
+    r = a({ method: "GET", path: "/", headers: empty_map(), params: empty_map() })
+    test.eq(r.status, 200)
+    test.eq(r.body, "home")
+})
+
+test.case("app maps a router 404 to a custom error page", fn() {
+    a = main.app(
+        {
+            routes: [web.get("/", fn(req) main.text("home"))],
+            errors: {
+                "404": fn(req, err) ({ status: 404, headers: empty_map(), body: "custom missing" }),
+            },
+        },
+    )
+    r = a({ method: "GET", path: "/nope", headers: empty_map(), params: empty_map() })
+    test.eq(r.status, 404)
+    test.eq(r.body, "custom missing")
+})
+
+test.case("abort inside a handler routes to that status page", fn() {
+    a = main.app(
+        {
+            routes: [web.get("/secret", fn(req) main.abort(403, "no"))],
+            errors: {
+                "403": fn(req, e) ({ status: 403, headers: empty_map(), body: "forbidden" }),
+            },
+        },
+    )
+    r = a({ method: "GET", path: "/secret", headers: empty_map(), params: empty_map() })
+    test.eq(r.status, 403)
+    test.eq(r.body, "forbidden")
+})
+
+test.case("one error handler serves a status however it is raised", fn() {
+    # A 404 reaches the error layer two ways: the router matching nothing, and a
+    # handler calling abort(404). Both must invoke the registered handler the
+    # same way, or a handler written for one path breaks on the other.
+    a = main.app(
+        {
+            routes: [
+                web.get("/", fn(req) main.text("home")),
+                web.get("/gone", fn(req) main.abort(404, "gone")),
+            ],
+            errors: {
+                "404": fn(req, err) ({ status: 404, headers: empty_map(), body: "missing" }),
+            },
+        },
+    )
+    miss = a({ method: "GET", path: "/nope", headers: empty_map(), params: empty_map() })
+    test.eq(miss.status, 404)
+    test.eq(miss.body, "missing")
+
+    aborted = a({ method: "GET", path: "/gone", headers: empty_map(), params: empty_map() })
+    test.eq(aborted.status, 404)
+    test.eq(aborted.body, "missing")
+})
+
+test.case("an error handler is given the error that caused it", fn() {
+    a = main.app(
+        {
+            routes: [web.get("/secret", fn(req) main.abort(403, "no peeking"))],
+            errors: {
+                "403": fn(req, err) ({ status: 403, headers: empty_map(), body: if is_null(err) { "no error" } else { "saw: " + string(get(err, "kind")) } }),
+            },
+        },
+    )
+    r = a({ method: "GET", path: "/secret", headers: empty_map(), params: empty_map() })
+    test.eq(r.body, "saw: http")
+})
+
+test.case("a route miss passes a null error, not a missing argument", fn() {
+    a = main.app(
+        {
+            routes: [web.get("/", fn(req) main.text("home"))],
+            errors: {
+                "404": fn(req, err) ({ status: 404, headers: empty_map(), body: if is_null(err) { "null error" } else { "unexpected error" } }),
+            },
+        },
+    )
+    r = a({ method: "GET", path: "/nope", headers: empty_map(), params: empty_map() })
+    test.eq(r.body, "null error")
+})
+
+test.case("a thrown bug becomes a 500", fn() {
+    a = main.app({ routes: [web.get("/boom", fn(req) error("kaboom"))] })
+    r = a({ method: "GET", path: "/boom", headers: empty_map(), params: empty_map() })
+    test.eq(r.status, 500)
+})
+
+test.case("security + cors options add middleware", fn() {
+    a = main.app(
+        { routes: [web.get("/", fn(req) main.text("ok"))], security: true, cors: { origin: "*" } },
+    )
+    r = a({ method: "GET", path: "/", headers: empty_map(), params: empty_map() })
+    test.eq(get(r.headers, "x-content-type-options"), "nosniff")
+    test.eq(get(r.headers, "access-control-allow-origin"), "*")
+})
+
+test.case("query reads a parsed query param with a default", fn() {
+    req = { params: { q: "hi" }, form: empty_map(), headers: empty_map() }
+    test.eq(main.query(req, "q"), "hi")
+    test.eq(main.query(req, "missing", "d"), "d")
+})
+
+test.case("query_int parses or falls back", fn() {
+    req = { params: { n: "42", bad: "x" }, headers: empty_map() }
+    test.eq(main.query_int(req, "n"), 42)
+    test.eq(main.query_int(req, "bad", -1), -1)
+    test.eq(main.query_int(req, "absent", 7), 7)
+})
+
+test.case("form reads a form field with a default", fn() {
+    req = { form: { email: "a@b.c" }, params: empty_map(), headers: empty_map() }
+    test.eq(main.form(req, "email"), "a@b.c")
+    test.eq(main.form(req, "nope", ""), "")
+})
+
+test.case("cookies parses the request Cookie header", fn() {
+    req = { headers: { cookie: "sid=abc; theme=dark" } }
+    c = main.cookies(req)
+    test.eq(get(c, "sid"), "abc")
+    test.eq(get(c, "theme"), "dark")
+})
+
+test.case("session reads a signed sid cookie", fn() {
+    signed = main.sign("user9", "sek")
+    req = { headers: { cookie: "sid=" + signed } }
+    test.eq(main.session(req, "sek"), "user9")
+    test.eq(main.session({ headers: empty_map() }, "sek"), null)
+})
+
+test.case("blueprint prefixes each route's path", fn() {
+    bp = main.blueprint(
+        "/api",
+        [web.get("/users", fn(req) main.text("u")), web.get("/items", fn(req) main.text("i"))],
+    )
+    test.eq(get(bp[0], "path"), "/api/users")
+    test.eq(get(bp[1], "path"), "/api/items")
+})
+
+test.case("blueprint group middleware wraps handlers outermost-first", fn() {
+    tag = fn(label) fn(req, next) insert(next(req), label, true)
+    bp = main.blueprint(
+        "/api",
+        [web.get("/x", fn(req) ({ status: 200, headers: empty_map(), body: "x" }))],
+        [tag("a")],
+    )
+    h = get(bp[0], "handler")
+    r = h({ path: "/api/x" })
+    test.eq(get(r, "a"), true)
+})
+
+test.case("app dispatches a blueprint's prefixed routes", fn() {
+    a = main.app(
+        { routes: [main.blueprint("/api", [web.get("/ping", fn(req) main.text("pong"))])] },
+    )
+    r = a({ method: "GET", path: "/api/ping", headers: empty_map(), params: empty_map() })
+    test.eq(r.status, 200)
+    test.eq(r.body, "pong")
+})
+
+test.case("url_for fills path params", fn() {
+    test.eq(main.url_for("/user/:id", { id: 5 }), "/user/5")
+})
+
+test.case("url_for appends a sorted, encoded query", fn() {
+    q = { b: "2", a: "x y" }
+    test.eq(main.url_for("/s", empty_map(), q), "/s?a=x%20y&b=2")
+})
+
+test.case("url_for with no query is just the path", fn() {
+    test.eq(main.url_for("/health"), "/health")
+})
+
+test.case("flash then flashes round-trips messages in order", fn() {
+    r1 = main.flash({ status: 200, headers: empty_map(), body: "" }, "Saved!", "sek")
+    r2 = main.flash(r1, "And again", "sek")
+    val = split(split(get(r2.headers, "set-cookie"), ";")[0], "=")[1]
+    req = { headers: { cookie: "_flash=" + val } }
+    test.eq(main.flashes(req, "sek"), ["Saved!", "And again"])
+})
+
+test.case("flashes is empty with no cookie or a bad secret", fn() {
+    test.eq(main.flashes({ headers: empty_map() }, "sek"), [])
+    r = main.flash({ status: 200, headers: empty_map(), body: "" }, "x", "sek")
+    val = split(split(get(r.headers, "set-cookie"), ";")[0], "=")[1]
+    req = { headers: { cookie: "_flash=" + val } }
+    test.eq(main.flashes(req, "wrong"), [])
+})
+
+test.case("clear_flash expires the cookie", fn() {
+    r = main.clear_flash({ status: 200, headers: empty_map(), body: "" })
+    test.eq(contains(get(r.headers, "set-cookie"), "Max-Age=0"), true)
+})
+
+test.case("validate flags a missing required field", fn() {
+    schema = { email: { required: true } }
+    r = main.validate(empty_map(), schema)
+    test.eq(r.valid, false)
+    test.eq(get(r.errors, "email"), "required")
+})
+
+test.case("validate coerces an int and enforces min", fn() {
+    schema = { age: { type: "int", min: 18 } }
+    ok = main.validate({ age: "21" }, schema)
+    test.eq(ok.valid, true)
+    test.eq(get(ok.values, "age"), 21)
+    test.eq(main.validate({ age: "5" }, schema).valid, false)
+    test.eq(main.validate({ age: "x" }, schema).valid, false)
+})
+
+test.case("validate checks email format", fn() {
+    schema = { email: { type: "email" } }
+    test.eq(main.validate({ email: "a@b.co" }, schema).valid, true)
+    test.eq(main.validate({ email: "nope" }, schema).valid, false)
+})

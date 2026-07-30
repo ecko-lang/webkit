@@ -1,0 +1,123 @@
+# webkit demo - a small guestbook, showing the framework end to end.
+#
+#   cd demo && ecko app.ecko        # then open http://localhost:8090
+#
+# What it exercises:
+#   - webkit.app assembly with routes, a blueprint, static files, middleware,
+#     security headers, and a custom 404 page
+#   - a validated POST form -> flash message -> redirect -> shown on next load
+#   - in-memory state in a `cell`, shared across the server's worker threads
+#   - native templates for views, with webkit.e escaping every piece of user data
+#   - a JSON API under /api and a /health check
+#
+# This file lives inside the webkit repo, so it imports the package source
+# directly and calls it `main`. In your own app you would `import webkit` and
+# call `webkit.app(...)` etc. (granting the package `["fs:read", "net"]`).
+
+import std.http
+import std.web
+import std.os
+import "../main.ecko"
+
+SECRET = os.env_or("SECRET", "dev-secret-change-me")
+PORT = int(os.env_or("PORT", "8090"))
+
+# In-memory store, shared across workers: a cell survives the share-nothing
+# spawn, so every request thread sees the same list. cell_update is atomic.
+messages = cell([{ name: "Ada", body: "First!" }, { name: "Grace", body: "Hello from the demo." }])
+
+# --- views (native templates; escape user data with main.e) ----------------
+template layout(title, inner) = """
+<!doctype html>
+<meta charset="utf-8">
+<title>{title}</title>
+<link rel="stylesheet" href="/static/style.css">
+<main>
+  <h1>{title}</h1>
+  {inner}
+</main>
+"""
+
+template flash_note(text) = """<p class="flash">{text}</p>"""
+template message_item(name, body) = """<li><b>{name}</b>: {body}</li>"""
+
+fn post_form() = """
+<form method="post" action="/messages">
+  <input name="name" placeholder="Your name">
+  <textarea name="body" placeholder="Say something..."></textarea>
+  <button>Post</button>
+</form>
+"""
+
+fn home_page(flashed, msgs) {
+    mut notes = ""
+    for m in flashed {
+        notes = notes + flash_note(main.e(m))
+    }
+    mut items = ""
+    for m in msgs {
+        items = items + message_item(main.e(m.name), main.e(m.body))
+    }
+    layout("Guestbook", notes + post_form() + "<ul class=\"messages\">" + items + "</ul>")
+}
+
+# --- handlers --------------------------------------------------------------
+fn home(req) = main.html(home_page(main.flashes(req, SECRET), cell_get(messages)))
+
+fn create_message(req) {
+    schema = { name: { required: true }, body: { required: true, max: 280 } }
+    result = main.validate(req.form, schema)
+    if result.valid {
+        cell_update(
+            messages,
+            fn(list) push(list, { name: main.form(req, "name"), body: main.form(req, "body") }),
+        )
+        main.flash(main.redirect("/"), "Thanks for posting!", SECRET)
+    } else { main.flash(main.redirect("/"), "A name and a message (up to 280 chars) are required.", SECRET) }
+}
+
+fn about(_req) = main.html(
+    layout(
+        "About",
+        "<p>A tiny guestbook built with the Ecko webkit framework.</p><p><a href=\"/\">&larr; Home</a></p>",
+    ),
+)
+
+# A JSON API, grouped under /api with a blueprint.
+fn api_messages(_req) {
+    msgs = cell_get(messages)
+    main.json({ count: len(msgs), messages: msgs })
+}
+
+api = main.blueprint("/api", [web.get("/messages", api_messages)])
+
+# Custom 404 (rendered through the same layout). Error handlers take
+# (req, err); err is null when the router simply matched nothing, as here.
+fn not_found(_req, _err) = main.with_headers(
+    {
+        status: 404,
+        headers: empty_map(),
+        body: layout("Not found", "<p>No such page. <a href=\"/\">&larr; Home</a></p>"),
+    },
+    { "content-type": "text/html; charset=utf-8" },
+)
+
+# --- assembly --------------------------------------------------------------
+app = main.app(
+    {
+        routes: [
+            web.get("/", home),
+            web.post("/messages", create_message),
+            web.get("/about", about),
+            web.get("/health", fn(_req) main.text("ok")),
+            main.static("/static", "public"),
+            api,
+        ],
+        middleware: [main.cache_control([{ prefix: "/static", value: "public, max-age=86400" }])],
+        security: true,
+        errors: { "404": not_found },
+    },
+)
+
+print("guestbook on http://localhost:" + string(PORT))
+http.serve(PORT, app)

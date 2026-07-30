@@ -4,54 +4,34 @@
 import std.test
 import "./main.ecko"
 
-test.case("escape covers the five HTML-significant characters", || {
+test.case("escape covers the five HTML-significant characters", fn() {
     test.eq(
         main.escape("<a href='x' title=\"y\">A & B</a>"),
         "&lt;a href=&#39;x&#39; title=&quot;y&quot;&gt;A &amp; B&lt;/a&gt;",
     )
 })
 
-test.case("render escapes interpolated values by default", || {
-    out = main.render(r"<h1>{{ title }}</h1>", { title: "Tom & Jerry" })
-    test.eq(out, "<h1>Tom &amp; Jerry</h1>")
+test.case("e is an alias for escape", fn() {
+    test.eq(main.e("<b>&"), "&lt;b&gt;&amp;")
 })
 
-test.case("render auto-escapes an XSS payload", || {
-    out = main.render(r"<p>{{ bio }}</p>", { bio: "<script>steal()</script>" })
-    test.eq(out, "<p>&lt;script&gt;steal()&lt;/script&gt;</p>")
-})
-
-test.case("triple braces opt out of escaping for trusted HTML", || {
-    out = main.render(r"<div>{{{ html }}}</div>", { html: "<b>bold</b>" })
-    test.eq(out, "<div><b>bold</b></div>")
-})
-
-test.case("render fills multiple holes and leaves text intact", || {
-    out = main.render(r"{{ a }} and {{ b }}!", { a: "one", b: "two" })
-    test.eq(out, "one and two!")
-})
-
-test.case("a missing key renders empty", || {
-    test.eq(main.render(r"[{{ nope }}]", { a: 1 }), "[]")
-})
-
-test.case("sign then unsign round-trips the value", || {
+test.case("sign then unsign round-trips the value", fn() {
     signed = main.sign("user=42", "s3cret")
     test.eq(main.unsign(signed, "s3cret"), "user=42")
 })
 
-test.case("unsign rejects a tampered value", || {
+test.case("unsign rejects a tampered value", fn() {
     signed = main.sign("user=42", "s3cret")
     tampered = replace(signed, "42", "99")
     test.eq(main.unsign(tampered, "s3cret"), null)
 })
 
-test.case("unsign rejects a wrong secret", || {
+test.case("unsign rejects a wrong secret", fn() {
     signed = main.sign("user=42", "s3cret")
     test.eq(main.unsign(signed, "other"), null)
 })
 
-test.case("cookie builds a Set-Cookie with the security flags", || {
+test.case("cookie builds a Set-Cookie with the security flags", fn() {
     c = main.cookie(
         "sid",
         "abc",
@@ -60,23 +40,23 @@ test.case("cookie builds a Set-Cookie with the security flags", || {
     test.eq(c, "sid=abc; Path=/; Max-Age=3600; HttpOnly; Secure; SameSite=Lax")
 })
 
-test.case("parse_cookies reads a Cookie header into a map", || {
+test.case("parse_cookies reads a Cookie header into a map", fn() {
     m = main.parse_cookies("sid=abc; theme=dark")
     test.eq(get(m, "sid"), "abc")
     test.eq(get(m, "theme"), "dark")
 })
 
-test.case("cors middleware adds the allow-origin header", || {
+test.case("cors middleware adds the allow-origin header", fn() {
     mw = main.cors({ origin: "*" })
     # a fake downstream returning a bare response map
-    next = |req| { status: 200, headers: empty_map(), body: "ok" }
+    next = fn(req) ({ status: 200, headers: empty_map(), body: "ok" })
     resp = mw({ method: "GET", headers: empty_map() }, next)
     test.eq(get(resp.headers, "access-control-allow-origin"), "*")
 })
 
-test.case("security_headers middleware sets hardening headers", || {
+test.case("security_headers middleware sets hardening headers", fn() {
     mw = main.security_headers()
-    next = |req| { status: 200, headers: empty_map(), body: "ok" }
+    next = fn(req) ({ status: 200, headers: empty_map(), body: "ok" })
     resp = mw({ method: "GET", headers: empty_map() }, next)
     test.eq(get(resp.headers, "x-content-type-options"), "nosniff")
     test.eq(get(resp.headers, "x-frame-options"), "DENY")
