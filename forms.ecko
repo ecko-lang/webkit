@@ -12,7 +12,11 @@ fn validate_field(raw, rules) {
     if t == "int" {
         n = try { int(raw) } catch (ex) { null }
         if is_null(n) { err = "must be an integer" } else { value = n }
-    } else if t == "email" { unless re.test("^[^@ ]+@[^@ ]+\\.[^@ ]+$", raw) { err = "must be an email" } } else if t == "url" { unless starts_with(raw, "http://") or starts_with(raw, "https://") { err = "must be a URL" } }
+    } else if t == "email" {
+        unless re.test("^[^@ ]+@[^@ ]+\\.[^@ ]+$", raw) { err = "must be an email" }
+    } else if t == "url" {
+        unless starts_with(raw, "http://") or starts_with(raw, "https://") { err = "must be a URL" }
+    }
     if is_null(err) {
         measure = if t == "int" { value } else { len(raw) }
         mn = get(rules, "min")

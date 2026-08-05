@@ -137,7 +137,15 @@ test.case("an error handler is given the error that caused it", fn() {
         {
             routes: [web.get("/secret", fn(req) main.abort(403, "no peeking"))],
             errors: {
-                "403": fn(req, err) ({ status: 403, headers: empty_map(), body: if is_null(err) { "no error" } else { "saw: " + string(get(err, "kind")) } }),
+                "403": fn(req, err) {
+                    status: 403,
+                    headers: empty_map(),
+                    body: if is_null(err) {
+                        "no error"
+                    } else {
+                        "saw: " + string(get(err, "kind"))
+                    },
+                },
             },
         },
     )
@@ -150,7 +158,11 @@ test.case("a route miss passes a null error, not a missing argument", fn() {
         {
             routes: [web.get("/", fn(req) main.text("home"))],
             errors: {
-                "404": fn(req, err) ({ status: 404, headers: empty_map(), body: if is_null(err) { "null error" } else { "unexpected error" } }),
+                "404": fn(req, err) {
+                    status: 404,
+                    headers: empty_map(),
+                    body: if is_null(err) { "null error" } else { "unexpected error" },
+                },
             },
         },
     )

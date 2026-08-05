@@ -1,6 +1,6 @@
 {
   "module": "github.com/ecko-lang/webkit",
-  "version": "0.10.0",
+  "version": "0.10.1",
   "entrypoint": "main.ecko",
   "description": "SaaS web-app batteries for Ecko: auto-escaping HTML templates, signed cookies, sessions, and CORS/security middleware.",
   "author": "Sean Nieuwoudt <sean@underwulf.com>",
