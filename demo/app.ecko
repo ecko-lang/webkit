@@ -73,7 +73,13 @@ fn create_message(req) {
             fn(list) push(list, { name: main.form(req, "name"), body: main.form(req, "body") }),
         )
         main.flash(main.redirect("/"), "Thanks for posting!", SECRET)
-    } else { main.flash(main.redirect("/"), "A name and a message (up to 280 chars) are required.", SECRET) }
+    } else {
+        main.flash(
+            main.redirect("/"),
+            "A name and a message (up to 280 chars) are required.",
+            SECRET,
+        )
+    }
 }
 
 fn about(_req) = main.html(
