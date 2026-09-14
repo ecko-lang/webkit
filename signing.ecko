@@ -32,24 +32,15 @@ export fn unsign(signed, secret) {
 
 ## constant_eq(a, b) -> whether the two strings match, without an early exit.
 ##
-## A length-then-content compare that does not return on the first differing
-## byte, which is what keeps a MAC comparison from leaking how much of a forged
-## value was correct. Written in Ecko, so it is far better than `==` here but is
-## not a hardware-level guarantee: the interpreter makes no promise about the
-## timing of the work underneath it. `std` has no constant-time primitive yet.
+## Delegates to `hash.constant_eq`, which is native. This used to be a loop
+## written here, and that could never be more than an approximation: Ecko code
+## allocates, bounds-checks and can be descheduled between iterations, so it
+## promises nothing about timing. The guarantee has to come from the layer that
+## controls the comparison.
 ##
 ## Package-internal: exported so `csrf` can reach it, not re-exported from the
 ## entrypoint.
-export fn constant_eq(a, b) {
-    if len(a) != len(b) { return false }
-    mut diff = 0
-    ca = chars(a)
-    cb = chars(b)
-    for i in range(0, len(ca)) {
-        if ca[i] != cb[i] { diff = diff + 1 }
-    }
-    diff == 0
-}
+export fn constant_eq(a, b) = hash.constant_eq(a, b)
 
 ## cookie(name, value, opts) -> a Set-Cookie header string.
 ##

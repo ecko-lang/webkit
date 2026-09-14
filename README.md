@@ -17,7 +17,7 @@ ecko get github.com/ecko-lang/webkit
 import webkit
 ```
 
-Needs Ecko 0.25.0 or later.
+Needs Ecko 0.27.0 or later, for `hash.constant_eq`.
 
 ## Usage
 
@@ -196,11 +196,10 @@ in the list, rather than by remembering to call something.
 
 ## Notes
 
-**One limitation, stated plainly.** Signature and token comparisons use a
-length-then-content compare that does not exit early, which is far better than
-`==` here. It is written in Ecko, so it is not a hardware-level guarantee: the
-interpreter makes no promise about the timing of the work underneath it. `std`
-has no constant-time compare primitive yet.
+**Comparisons are constant-time.** Signatures, session ids and CSRF tokens are
+compared with `hash.constant_eq`, which is native, so how long a check takes
+does not reveal how much of a forged value was right. Length is not hidden, only
+content, and every value compared here is fixed-length.
 
 **Not included:** multipart form data, so no file uploads.
 
