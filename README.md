@@ -133,6 +133,7 @@ from a request, a database, or a model.
 ```ecko
 resp = webkit.flash(webkit.redirect("/"), "Profile saved", SECRET)   # set on the response
 msgs = webkit.flashes(req, SECRET)                                   # read on the next request
+resp = webkit.clear_flash(resp)                                      # expire them, or they repeat
 
 result = webkit.validate(req.form, {
     email: { type: "email" },
