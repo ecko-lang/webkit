@@ -2,7 +2,7 @@
 import std.web
 import "./main.ecko"
 
-fn home(_req) = main.html("<h1>Home</h1>")
+fn home(_req) = main.html(main.render(r"""<h1>{t}</h1>""", { t: "Home" }))
 
 app = main.app(
     {

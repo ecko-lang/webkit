@@ -4,6 +4,7 @@ import std.http
 import std.fs
 import std.web
 import "./util.ecko"
+import "./markup.ecko"
 
 # The lowercased file extension of a path, without the dot ("" if none).
 fn ext_of(path) {
@@ -78,9 +79,19 @@ export fn abort(status, body = "") {
 
 ## html(body, opts?) -> an HTML response. `opts.cache` sets cache-control.
 ##
-## The body is sent as given, so escape anything user-supplied with `e`.
+## `body` must be markup from `render` or `raw`, never a plain string. That
+## refusal is the whole point: the only route to the wire runs through a value
+## that has already been escaped or has been explicitly vouched for, so an
+## unescaped string cannot reach the page by being forgotten about.
 export fn html(body, opts = empty_map()) {
-    r = http.html(body)
+    unless markup.is_safe(body) {
+        error(
+            "webkit.html: expected markup from render() or raw(), got " +
+                type_of(body) +
+                " - build the page with render() so its values are escaped",
+        )
+    }
+    r = http.html(body.html)
     c = get(opts, "cache")
     if is_null(c) { r } else { cache(r, c) }
 }

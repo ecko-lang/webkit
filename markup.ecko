@@ -1,0 +1,143 @@
+# webkit/markup - auto-escaping HTML templates.
+#
+# The engine is deliberately small: substitution and escaping, and no control
+# flow. Loops and conditionals are ordinary Ecko code building fragments that
+# compose as Safe values, because a second, weaker language living inside
+# string literals would be less predictable than the one you are already
+# writing, invisible to `ecko fmt`, and unreachable by `ecko check`.
+#
+# Templates are raw strings, and `r"""..."""` is the form to reach for: it
+# disables interpolation and escape processing, so `{name}` survives for this
+# engine to substitute and HTML's double quotes survive as themselves.
+#
+#   render(r"""<a href="{url}">{label}</a>""", { url: u, label: l })
+#
+# A plain "..." string would have Ecko interpolate `{url}` at parse time, before
+# escaping could ever happen, which is the hole this module exists to close.
+
+import "./escaping.ecko"
+
+# A string known to be HTML-safe: either escaped by `render` or vouched for by
+# `raw`. It is a struct rather than a string so that it cannot be mistaken for
+# one, and so that a lookalike map cannot impersonate it.
+type Safe = Safe { html: String }
+
+IDENT_START = "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ_"
+IDENT_REST = "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ_0123456789"
+
+# Placeholder names are plain identifiers. Anything else is a literal brace the
+# author forgot to double, and saying so beats silently rendering it.
+fn is_ident(s) {
+    if len(s) == 0 { return false }
+    cs = chars(s)
+    unless contains(IDENT_START, cs[0]) { return false }
+    for c in cs {
+        unless contains(IDENT_REST, c) { return false }
+    }
+    true
+}
+
+## is_safe(v) -> true when `v` came from `render` or `raw`.
+##
+## A plain string is not safe, and neither is a map that happens to have an
+## `html` key - only the real type passes.
+export fn is_safe(v) = match v {
+    Safe { html: _ } => true
+    _ => false
+}
+
+## raw(s) -> `s` marked safe, spliced into templates without escaping.
+##
+## The audited escape hatch, and the only way unescaped text reaches a page.
+## Everything passed here is trusted completely, so it must never carry user
+## input that has not already been escaped. Grep for it in review.
+##
+## example:
+##   raw("<br>")
+export fn raw(s) = Safe { html: string(s) }
+
+# One value rendered to markup: a Safe passes through, a list joins its
+# elements, and anything else is stringified and escaped.
+fn coerce(v) {
+    if is_safe(v) { return v.html }
+    if type_of(v) == "list" {
+        mut parts = []
+        for item in v {
+            parts = push(parts, coerce(item))
+        }
+        return join(parts, "")
+    }
+    escaping.escape(string(v))
+}
+
+## join_safe(items, sep?) -> the items rendered and joined into one Safe.
+##
+## Each item follows the same rule as a substitution: already-Safe passes
+## through, anything else is escaped. This is how a list of rows becomes one
+## fragment when you want a separator between them; a bare list substituted
+## into `render` is joined with nothing.
+##
+## example:
+##   join_safe(["a", "b"], ", ")
+export fn join_safe(items, sep = "") {
+    mut parts = []
+    for item in items {
+        parts = push(parts, coerce(item))
+    }
+    Safe { html: join(parts, sep) }
+}
+
+## render(tpl, values?) -> a Safe with every `{name}` substituted.
+##
+## Every substituted value is escaped unless it is already Safe, which is what
+## makes nesting compose: a fragment built by `render` splices into another
+## `render` without being escaped twice. `{{` and `}}` are literal braces, for
+## inline CSS and JavaScript.
+##
+## An unknown placeholder raises rather than rendering blank, so a typo is a
+## failure you see rather than a hole in the page you do not.
+##
+## example:
+##   render(r"""<p class="note">{body}</p>""", { body: user_text })
+export fn render(tpl, values = empty_map()) {
+    src = string(tpl)
+    cs = chars(src)
+    n = len(cs)
+    mut parts = []
+    mut i = 0
+    while i < n {
+        c = cs[i]
+        if c == r"{" and i + 1 < n and cs[i + 1] == r"{" {
+            parts = push(parts, r"{")
+            i = i + 2
+        } else if c == r"}" and i + 1 < n and cs[i + 1] == r"}" {
+            parts = push(parts, r"}")
+            i = i + 2
+        } else if c == r"{" {
+            mut j = i + 1
+            while j < n and cs[j] != r"}" {
+                j = j + 1
+            }
+            if j >= n {
+                error(r"webkit.render: unclosed '{' in template - use {{ for a literal brace")
+            }
+            name = src[i + 1..j]
+            unless is_ident(name) {
+                error(
+                    r"webkit.render: placeholder '" +
+                        name +
+                        r"' is not a name - use {{ and }} for literal braces",
+                )
+            }
+            unless contains(keys(values), name) {
+                error(r"webkit.render: no value supplied for placeholder '" + name + r"'")
+            }
+            parts = push(parts, coerce(get(values, name)))
+            i = j + 1
+        } else {
+            parts = push(parts, c)
+            i = i + 1
+        }
+    }
+    Safe { html: join(parts, "") }
+}

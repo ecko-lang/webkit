@@ -5,10 +5,13 @@
 # read the implementation:
 #
 #   util.ecko        shared helpers (get_or / with_header stay package-internal)
-#   escaping.ecko    escape, e
+#   markup.ecko      render, raw, join_safe - the auto-escaping template engine
+#   escaping.ecko    escape
 #   signing.ecko     HMAC-signed cookies + sessions
 #   responses.ecko   response builders + static file serving
-#   middleware.ecko  cors, security_headers, cache_control
+#   csrf.ecko        CSRF protection (kept under the `csrf` namespace)
+#   session.ecko     cookie_store / store - sessions behind one interface
+#   middleware.ecko  cors, security_headers, cache_control, require_session
 #   request.ecko     request accessors + flash messages
 #   forms.ecko       validate
 #   app.ecko         app assembly, blueprints, error handling
@@ -16,10 +19,24 @@
 # `util` exports get_or / with_header for its siblings to use; only with_headers
 # is part of webkit's public surface, so curate it rather than re-export all.
 export { with_headers } from "./util.ecko"
-export * from "./escaping.ecko"
-export * from "./signing.ecko"
+export { render, raw, join_safe, is_safe } from "./markup.ecko"
+# `e` is gone with 0.27.0: it existed to be terse at manual escape sites, and
+# `render` removes the need for those. `escape` stays for the rare value built
+# into markup by hand.
+export { escape } from "./escaping.ecko"
+# `constant_eq` is exported by signing.ecko so `csrf` can reach it across the
+# file boundary, and is deliberately not published: it is a comparison helper,
+# not API. `session_new`/`session_read` are gone in 0.27.0, superseded by the
+# store interface in session.ecko, which does the same job for cookie sessions
+# and can also revoke.
+export { sign, unsign, cookie, parse_cookies } from "./signing.ecko"
 export * from "./responses.ecko"
 export * from "./middleware.ecko"
+export * from "./session.ecko"
+# Prefixed rather than bare: `protect`, `field` and `token` are far too generic
+# to sit on a flat surface beside `form` and `query`, and the prefix makes a
+# missing CSRF call obvious in review.
+export { protect as csrf_protect, field as csrf_field, token as csrf_token } from "./csrf.ecko"
 export * from "./request.ecko"
 export * from "./forms.ecko"
 export * from "./app.ecko"

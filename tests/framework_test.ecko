@@ -2,7 +2,7 @@
 import std.test
 import std.fs
 import std.web
-import "./main.ecko"
+import "../main.ecko"
 
 test.case("content_type maps by extension", fn() {
     test.eq(main.content_type("a/b/index.html"), "text/html; charset=utf-8")
@@ -44,7 +44,7 @@ test.case("redirect builds a 302 with a location header", fn() {
 })
 
 test.case("html honors an opts.cache", fn() {
-    r = main.html("<p>hi</p>", { cache: "no-store" })
+    r = main.html(main.raw("<p>hi</p>"), { cache: "no-store" })
     test.eq(r.status, 200)
     test.eq(get(r.headers, "content-type"), "text/html; charset=utf-8")
     test.eq(get(r.headers, "cache-control"), "no-store")
@@ -209,13 +209,6 @@ test.case("cookies parses the request Cookie header", fn() {
     c = main.cookies(req)
     test.eq(get(c, "sid"), "abc")
     test.eq(get(c, "theme"), "dark")
-})
-
-test.case("session reads a signed sid cookie", fn() {
-    signed = main.sign("user9", "sek")
-    req = { headers: { cookie: "sid=" + signed } }
-    test.eq(main.session(req, "sek"), "user9")
-    test.eq(main.session({ headers: empty_map() }, "sek"), null)
 })
 
 test.case("blueprint prefixes each route's path", fn() {

@@ -1,0 +1,102 @@
+# Tests for webkit's auto-escaping template engine.
+#
+# The claim under test is narrow and worth stating exactly: an XSS hole should
+# require the author to type `raw()`. Every case here is either a way a value
+# could reach the page unescaped, or a way the engine could corrupt markup that
+# was already safe.
+
+import std.test
+import "../markup.ecko"
+import "../main.ecko"
+
+# --- escaping -----------------------------------------------------------------
+
+test.case("every HTML-significant character is escaped", fn() {
+    got = markup.render(r"{v}", { v: "&<>\"'" }).html
+    test.eq(got, "&amp;&lt;&gt;&quot;&#39;")
+})
+
+test.case("a script payload comes out inert", fn() {
+    got = markup.render(r"<p>{v}</p>", { v: "<script>alert(1)</script>" }).html
+    test.eq(got, "<p>&lt;script&gt;alert(1)&lt;/script&gt;</p>")
+})
+
+test.case("an attribute-breaking payload cannot escape its quotes", fn() {
+    got = markup.render(r"""<a title="{v}">x</a>""", { v: "\" onmouseover=\"evil()" }).html
+    test.ok(not contains(got, "\" onmouseover"), "quote must not survive: " + got)
+})
+
+test.case("non-string values are stringified then escaped", fn() {
+    test.eq(markup.render(r"{v}", { v: 42 }).html, "42")
+    test.eq(markup.render(r"{v}", { v: null }).html, "null")
+})
+
+# --- Safe values --------------------------------------------------------------
+
+test.case("a Safe value is spliced verbatim, not re-escaped", fn() {
+    inner = markup.render(r"<b>{v}</b>", { v: "a&b" })
+    outer = markup.render(r"<p>{inner}</p>", { inner: inner })
+    test.eq(outer.html, "<p><b>a&amp;b</b></p>")
+})
+
+test.case("raw survives intact", fn() {
+    test.eq(markup.render(r"{v}", { v: markup.raw("<br>") }).html, "<br>")
+})
+
+test.case("render returns a Safe, and is_safe recognises only that", fn() {
+    test.ok(markup.is_safe(markup.render(r"x", empty_map())), "render -> Safe")
+    test.ok(markup.is_safe(markup.raw("x")), "raw -> Safe")
+    test.ok(not markup.is_safe("x"), "a string is not Safe")
+    test.ok(not markup.is_safe({ html: "x" }), "a lookalike map is not Safe")
+})
+
+# --- lists --------------------------------------------------------------------
+
+test.case("a list value joins its elements, escaping each", fn() {
+    test.eq(markup.render(r"{v}", { v: ["a&b", "c"] }).html, "a&amp;bc")
+})
+
+test.case("a list of Safe joins without re-escaping", fn() {
+    rows = [markup.render(r"<li>{v}</li>", { v: "a&b" }), markup.raw("<li>z</li>")]
+    test.eq(
+        markup.render(r"<ul>{rows}</ul>", { rows: rows }).html,
+        "<ul><li>a&amp;b</li><li>z</li></ul>",
+    )
+})
+
+test.case("join_safe puts a separator between fragments", fn() {
+    test.eq(markup.join_safe(["a", "b"], ", ").html, "a, b")
+})
+
+# --- template syntax ----------------------------------------------------------
+
+test.case("a doubled brace is a literal brace", fn() {
+    test.eq(
+        markup.render(r"<style>.a{{color:red}}</style>", empty_map()).html,
+        r"<style>.a{color:red}</style>",
+    )
+})
+
+test.case("an unknown placeholder is a mistake, not a blank", fn() {
+    test.err(fn() markup.render(r"{nmae}", { name: "x" }), "nmae")
+})
+
+test.case("an unclosed placeholder is reported", fn() {
+    test.err(fn() markup.render(r"<p>{v", { v: "x" }), "unclosed")
+})
+
+test.case("a placeholder that is not an identifier is reported", fn() {
+    test.err(fn() markup.render(r"{a.b}", { a: "x" }), "a.b")
+})
+
+# --- the rule that makes it work ----------------------------------------------
+
+test.case("the html response refuses a bare string", fn() {
+    test.err(fn() main.html("<p>hi</p>"), "render")
+})
+
+test.case("the html response accepts a Safe", fn() {
+    r = main.html(markup.render(r"<p>{v}</p>", { v: "a&b" }))
+    test.eq(r.status, 200)
+    test.eq(r.body, "<p>a&amp;b</p>")
+})

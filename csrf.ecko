@@ -1,0 +1,106 @@
+# webkit/csrf - Cross-Site Request Forgery protection.
+#
+# The attack is a form on another origin POSTing here with the victim's cookies
+# attached, because the browser sends them whoever asked. The defence is a
+# signed double-submit token: a cookie this app sets, which must be echoed back
+# in a form field. A cross-origin page can cause the cookie to be *sent* but
+# cannot *read* it, so it cannot produce the matching field.
+#
+# The token is deliberately not tied to having a session. Login CSRF is a real
+# attack - an attacker logging a victim into the attacker's account, so the
+# victim's subsequent activity lands there - and a login form has no session
+# yet, so a session-bound token would leave exactly that form unprotected.
+#
+# `SameSite=Lax` on the cookie is a second, independent layer. It is good and it
+# is not sufficient on its own: it is a browser policy rather than something
+# this app verifies, and it does not cover same-site subdomain attackers.
+
+import std.random
+import "./util.ecko"
+import "./signing.ecko"
+import "./markup.ecko"
+
+# Methods defined as side-effect free, and so exempt. An app that mutates state
+# on GET is outside what this can defend, and needs to stop doing that.
+SAFE_METHODS = ["GET", "HEAD", "OPTIONS"]
+
+COOKIE_NAME = "csrf"
+FIELD_NAME = "_csrf"
+
+fn cookie_header(req) = util.get_or(util.get_or(req, "headers", empty_map()), "cookie", null)
+
+# The verified token already in the request's cookie, or null. Null covers both
+# "no cookie" and "a cookie that does not verify", which is what we want: a
+# forged cookie must be no better than none.
+fn existing_token(req, secret) {
+    raw = get(signing.parse_cookies(cookie_header(req)), COOKIE_NAME)
+    if is_null(raw) { null } else { signing.unsign(raw, secret) }
+}
+
+fn forbidden() {
+    {
+        status: 403,
+        headers: { "content-type": "text/plain; charset=utf-8" },
+        body: "403 Forbidden - the form's security token was missing or did not match. Reload the page and try again.",
+    }
+}
+
+## token(req) -> the CSRF token for this request, or null outside `protect`.
+##
+## `protect` puts it on the request, so any handler beneath it can read it. Most
+## code wants `field` instead.
+export fn token(req) = util.get_or(req, "csrf", null)
+
+## field(req) -> the hidden input carrying the token, as markup.
+##
+## Splice it into every form that POSTs, since without it the request is
+## refused. It is Safe markup, so it goes straight into a `render` template.
+##
+## example:
+##   render(r"""<form method="post">{csrf}...</form>""", { csrf: field(req) })
+export fn field(req) = markup.render(
+    r"""<input type="hidden" name="_csrf" value="{tok}">""",
+    { tok: token(req) },
+)
+
+## protect(secret, opts?) -> middleware refusing unsafe requests without a token.
+##
+## Issues the token cookie when there is not already a valid one, checks
+## `POST`/`PUT`/`PATCH`/`DELETE` against it, and answers 403 on a mismatch. The
+## comparison does not exit early, so it does not leak how much of a guess was
+## right.
+##
+## `app(spec)` installs this for you when given a `csrf` secret, so reach for it
+## directly only when assembling a router by hand.
+export fn protect(secret, opts = empty_map()) {
+    fn(req, next) {
+        existing = existing_token(req, secret)
+        tok = if is_null(existing) { random.token(32) } else { existing }
+        method = upper(string(util.get_or(req, "method", "GET")))
+        unless contains(SAFE_METHODS, method) {
+            submitted = util.get_or(util.get_or(req, "form", empty_map()), FIELD_NAME, null)
+            # A request whose cookie did not verify has no token to match
+            # against, so it is refused regardless of what it submitted.
+            if is_null(existing) or is_null(submitted) { return forbidden() }
+            unless signing.constant_eq(string(submitted), tok) { return forbidden() }
+        }
+        resp = next(insert(req, "csrf", tok))
+        if is_null(existing) {
+            util.with_header(
+                resp,
+                "set-cookie",
+                signing.cookie(
+                    COOKIE_NAME,
+                    signing.sign(tok, secret),
+                    {
+                        path: "/",
+                        http_only: true,
+                        same_site: "Lax",
+                        secure: get(opts, "secure") == true,
+                        max_age: util.get_or(opts, "max_age", 604800),
+                    },
+                ),
+            )
+        } else { resp }
+    }
+}

@@ -1,0 +1,111 @@
+# Tests for sessions.
+#
+# Two stores, one interface. The cookie store keeps the data in the cookie and
+# needs no infrastructure; the server store keeps an id in the cookie and the
+# data wherever you put it. The point of the shared interface is that swapping
+# one for the other does not touch handler code, so most of these cases run the
+# same body against both.
+
+import std.test
+import "../session.ecko"
+
+SECRET = "test-secret-not-a-real-one"
+
+# An in-memory server store, standing in for a database. A `cell` rather than a
+# top-level `mut`: the store's three verbs are closures that outlive the call
+# that built them and have to share one piece of state, which is what a cell is
+# for.
+ROWS = cell(empty_map())
+
+fn memory_store() {
+    session.store({ load: fn(id) get(cell_get(ROWS), id), save: fn(id, data) {
+        cell_update(ROWS, fn(m) insert(m, id, data))
+        null
+    }, delete: fn(id) {
+        cell_update(ROWS, fn(m) remove(m, id))
+        null
+    } })
+}
+
+fn blank_resp() = { status: 200, headers: empty_map(), body: "" }
+
+# The request a browser would make next, carrying whatever the response set.
+fn next_req(resp) {
+    sc = get(resp.headers, "set-cookie")
+    header = if is_null(sc) { "" } else { split(sc, ";")[0] }
+    { method: "GET", path: "/", headers: { cookie: header }, params: empty_map() }
+}
+
+fn both_stores() = [session.cookie_store(SECRET), memory_store()]
+
+# --- the shared contract --------------------------------------------------------
+
+test.case("start then read round-trips the session data", fn() {
+    for st in both_stores() {
+        resp = st.start(blank_resp(), { user: 7, handle: "ada" })
+        got = st.read(next_req(resp))
+        test.eq(get(got, "user"), 7)
+        test.eq(get(got, "handle"), "ada")
+    }
+})
+
+test.case("a request with no cookie has no session", fn() {
+    for st in both_stores() {
+        test.eq(st.read({ method: "GET", path: "/", headers: empty_map() }), null)
+    }
+})
+
+test.case("a tampered cookie reads as no session, not as a forged one", fn() {
+    for st in both_stores() {
+        resp = st.start(blank_resp(), { user: 7 })
+        req = next_req(resp)
+        bad = { method: "GET", path: "/", headers: { cookie: req.headers.cookie + "x" } }
+        test.eq(st.read(bad), null)
+    }
+})
+
+test.case("the session cookie is HttpOnly and SameSite", fn() {
+    for st in both_stores() {
+        sc = get(st.start(blank_resp(), { user: 1 }).headers, "set-cookie")
+        test.ok(contains(sc, "HttpOnly"), "HttpOnly: " + sc)
+        test.ok(contains(sc, "SameSite"), "SameSite: " + sc)
+    }
+})
+
+test.case("end expires the cookie and the session stops reading", fn() {
+    for st in both_stores() {
+        started = st.start(blank_resp(), { user: 7 })
+        req = next_req(started)
+        ended = st.end(req, blank_resp())
+        test.ok(contains(get(ended.headers, "set-cookie"), "Max-Age=0"), "cookie should expire")
+    }
+})
+
+# --- what only a server store can do --------------------------------------------
+
+test.case("a server store revokes, so an old cookie stops working", fn() {
+    st = memory_store()
+    req = next_req(st.start(blank_resp(), { user: 7 }))
+    test.ok(not is_null(st.read(req)), "session should read before revocation")
+    st.end(req, blank_resp())
+    test.eq(st.read(req), null, "the same cookie must not work after revocation")
+})
+
+test.case("a server store keeps the payload out of the cookie", fn() {
+    st = memory_store()
+    resp = st.start(blank_resp(), { secret_note: "not-for-the-client" })
+    test.ok(
+        not contains(get(resp.headers, "set-cookie"), "not-for-the-client"),
+        "server-side data must not appear in the cookie",
+    )
+})
+
+test.case("a cookie store carries its payload, which is why it cannot revoke", fn() {
+    st = session.cookie_store(SECRET)
+    req = next_req(st.start(blank_resp(), { user: 7 }))
+    st.end(req, blank_resp())
+    test.ok(
+        not is_null(st.read(req)),
+        "a cookie session cannot be revoked server-side - this is the documented trade",
+    )
+})

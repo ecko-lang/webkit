@@ -3,6 +3,7 @@
 import std.web
 import "./util.ecko"
 import "./middleware.ecko"
+import "./csrf.ecko"
 
 # A plain fallback error response when no custom handler is registered.
 fn default_error_page(status) {
@@ -54,9 +55,15 @@ export fn blueprint(prefix, routes, mw = []) {
 
 ## app(spec) -> a request handler for `http.serve`.
 ##
-## `spec` is `{ routes, middleware, errors, security, cors }`. Middleware runs
-## outermost-first in the order given, after `security` and `cors` if those are
-## set. `errors` maps a status as text to a handler, so `{ "404": page }`.
+## `spec` is `{ routes, middleware, errors, security, cors, csrf }`. Middleware
+## runs outermost-first in the order given, after `security`, `cors` and `csrf`
+## if those are set. `errors` maps a status as text to a handler, so
+## `{ "404": page }`.
+##
+## `csrf` is a secret, and giving one installs CSRF protection over every
+## state-changing route. Forms then need `csrf.field(req)` in them, and a form
+## without it is refused. Leaving `csrf` out leaves those routes unprotected,
+## which is almost never what you want for anything with a session.
 ##
 ## Every error handler is called as `handler(req, err)`. `err` is null when the
 ## router simply found no route, so one 404 handler serves both that case and
@@ -71,6 +78,8 @@ export fn app(spec) {
     if get(spec, "security") == true { mw = push(mw, middleware.security_headers()) }
     cors_opts = get(spec, "cors")
     unless is_null(cors_opts) { mw = push(mw, middleware.cors(cors_opts)) }
+    csrf_secret = get(spec, "csrf")
+    unless is_null(csrf_secret) { mw = push(mw, csrf.protect(csrf_secret)) }
     for m in util.get_or(spec, "middleware", []) {
         mw = push(mw, m)
     }

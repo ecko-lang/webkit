@@ -30,9 +30,17 @@ export fn unsign(signed, secret) {
     if constant_eq(mac, expected) { value } else { null }
 }
 
-# A length-then-content compare that avoids returning early on the first
-# differing byte (reduces MAC timing leakage; both are fixed-length hex here).
-fn constant_eq(a, b) {
+## constant_eq(a, b) -> whether the two strings match, without an early exit.
+##
+## A length-then-content compare that does not return on the first differing
+## byte, which is what keeps a MAC comparison from leaking how much of a forged
+## value was correct. Written in Ecko, so it is far better than `==` here but is
+## not a hardware-level guarantee: the interpreter makes no promise about the
+## timing of the work underneath it. `std` has no constant-time primitive yet.
+##
+## Package-internal: exported so `csrf` can reach it, not re-exported from the
+## entrypoint.
+export fn constant_eq(a, b) {
     if len(a) != len(b) { return false }
     mut diff = 0
     ca = chars(a)

@@ -1,15 +1,11 @@
 # Webkit - Ecko Std Lib Package
 
-SaaS web-app batteries for [Ecko](https://ecko.sh), written in Ecko. Everything
-you reach for on top of the built-in HTTP server and router:
+Web-app batteries for Ecko: HTML templates that escape by default, CSRF
+protection, sessions that can be revoked, and the middleware around them.
 
-- **Native `template` functions** for views, with explicit escaping
-  (`webkit.escape` / `webkit.e`) so XSS holes are visible in the code.
-- **HMAC-signed cookies**, a **session** helper, and **flash messages** (built
-  on `hash.hmac_sha256` + `random.token`).
-- **Form validation** (`webkit.validate`) for required fields, types, and
-  min/max/pattern rules.
-- **CORS** and **security-header** middleware for `web.router`.
+It builds on `std.web` rather than replacing it. `std.web` gives you the router
+and the verbs; webkit gives you everything a real app needs on top, and the two
+compose, so `web.get("/u/:handle", profile)` is still how you declare a route.
 
 ## Install
 
@@ -17,135 +13,188 @@ you reach for on top of the built-in HTTP server and router:
 ecko get github.com/ecko-lang/webkit
 ```
 
-## Signed cookies & sessions
-
 ```ecko
-signed = webkit.sign("user=42", SECRET)   # "user=42.<hmac>"
-webkit.unsign(signed, SECRET)             # "user=42", or null if tampered
-
-s = webkit.session_new(SECRET)            # { id, cookie }
-# ...send s.cookie as a Set-Cookie header...
-webkit.session_read(req.headers.cookie, SECRET)   # the id, or null
+import webkit
 ```
 
-`webkit.cookie(name, value, { path, max_age, http_only, secure, same_site })`
-builds a `Set-Cookie` string; `webkit.parse_cookies(header)` reads a request
-`Cookie` header into a map.
+Needs Ecko 0.25.0 or later.
 
-## Middleware
-
-Drop these into `web.router`'s middleware list:
+## Usage
 
 ```ecko
 import std.web
-import webkit
-
-app = web.router(
-    routes,
-    [
-        webkit.security_headers(),        # nosniff, DENY framing, referrer policy
-        webkit.cors({ origin: "*" }),     # allow-origin + OPTIONS preflight
-    ],
-)
-```
-
-## Framework
-
-Assemble a whole app with `webkit.app`:
-
-```ecko
 import std.http
-import std.web
 import webkit
 
-app = webkit.app({
-    routes: [
-        web.get("/", |req| webkit.html("<h1>Home</h1>")),
-        webkit.static("/assets", "public"),
-    ],
-    middleware: [webkit.cache_control([{ prefix: "/assets", value: "public, max-age=86400" }])],
-    security: true,
-    errors: { "404": |req, err| webkit.html("<h1>Not found</h1>") },
-})
+sessions = webkit.cookie_store(reveal(SECRET))
+
+fn home(req) {
+    page = webkit.render(
+        r"""<h1>Hello, {name}</h1>
+            <form method="post" action="/post">{csrf}
+              <textarea name="body"></textarea>
+              <button type="submit">Post</button>
+            </form>""",
+        { name: webkit.query(req, "name", "world"), csrf: webkit.csrf_field(req) },
+    )
+    webkit.html(page)
+}
+
+app = webkit.app(
+    {
+        routes: [web.get("/", home), web.post("/post", create)],
+        security: true,
+        csrf: reveal(SECRET),
+    },
+)
+
 http.serve(8080, app)
 ```
 
-- **Error handlers take `(req, err)`.** `errors` maps a status to a handler;
-  `err` is the caught error, or `null` when the status came from the router
-  matching no route. One handler therefore covers a status however it was
-  raised - a 404 from a missing route and a 404 from `webkit.abort(404)` reach
-  the same function with the same shape.
-- `webkit.file(path, { cache })` serves one file fresh (no read-once staleness).
-- `webkit.redirect(url)`, `webkit.abort(404)`, `webkit.json/html/text(v, { cache })`,
-  `webkit.with_headers`, `webkit.cache`, `webkit.content_type`.
-- **Escaping is explicit** in native templates - call `webkit.escape(x)` (alias
-  `webkit.e`) on untrusted data. A forgotten escape is an XSS hole.
+## Templates that escape by default
 
-The framework serves files and calls the built-in HTTP/router (both `net`-gated),
-so grant webkit `fs:read` **and** `net` in your app's `ecko.json`:
-`"dependencies": { "webkit": { "path": "github.com/ecko-lang/webkit", "version": "v0.10.0", "grant": ["fs:read", "net"] } }`.
+`render` takes a raw string and a map of values, and escapes every value it
+substitutes. It returns markup, not a string, and `webkit.html` accepts only
+markup. That is the whole design:
 
-### Requests & routing
+> An XSS hole requires you to type `raw()`. It cannot happen by forgetting.
 
 ```ecko
-# In a handler, read the request:
-q    = webkit.query(req, "search", "")     # query string param + default
-n    = webkit.query_int(req, "page", 1)    # parsed int + default
-name = webkit.form(req, "name")            # posted form field
-body = webkit.json_body(req)               # decoded JSON body (or null)
-uid  = webkit.session(req, SECRET)         # signed session id (or null)
+webkit.render(r"""<p>{body}</p>""", { body: "<script>alert(1)</script>" })
+# <p>&lt;script&gt;alert(1)&lt;/script&gt;</p>
 
-# Group routes with a blueprint (prefix + optional group middleware):
-api = webkit.blueprint("/api", [
-    web.get("/users", list_users),
-    web.post("/users", create_user),
-], [require_auth])
-
-app = webkit.app({ routes: [web.get("/", home), api] })
-
-# Build URLs without hardcoding:
-webkit.url_for("/user/:id", { id: 42 })   # "/user/42"
+webkit.html("<p>hi</p>")   # refused: expected markup from render() or raw()
 ```
 
-### Templating & escaping
+**Write templates as `r"""..."""`.** A plain `"..."` string has Ecko interpolate
+`{body}` at parse time, before escaping could happen, which is the hole this
+closes. The triple-quoted raw form leaves both `{name}` and HTML's double
+quotes alone, and dedents multi-line blocks.
 
-Views are **native Ecko `template` functions** - variables, loops, conditionals,
-and partials (a template is a function, so `{header(title)}` includes one):
+Fragments compose, because a value that is already markup is spliced rather
+than escaped again:
 
 ```ecko
-template layout(title, body) = """<!doctype html><title>{title}</title>{body}"""
-template row(item) = """<li>{webkit.e(item.name)} - {item.qty}</li>"""
-template list(items) = """<ul>{for it in items}{row(it)}{end}</ul>"""
+rows = []
+for p in posts {
+    rows = push(rows, webkit.render(r"""<li>{body}</li>""", { body: p.body }))
+}
+webkit.render(r"""<ul>{rows}</ul>""", { rows: rows })   # a list joins itself
 ```
 
-**Escaping is explicit.** Native `{expr}` is raw (so AI-prompt templates stay
-untouched), so wrap untrusted data in `webkit.escape(x)` / `webkit.e(x)`:
+`{{` and `}}` are literal braces, for inline CSS and JavaScript. An unknown
+placeholder raises rather than rendering blank, so a typo is a failure you see
+instead of a hole in the page you do not.
+
+There is **no control flow in templates** - no loops, no conditionals, no
+filters. Build fragments with Ecko code and compose them, as above. Ecko is
+already a capable language, and a second weaker one inside string literals
+would be less predictable, invisible to `ecko fmt` and unreachable by
+`ecko check`. The cost is real and worth knowing: a page with deep conditional
+structure reads as Ecko functions returning markup, not as one template file.
+
+`raw(s)` is the audited escape hatch and the only way unescaped text reaches a
+page. Grep for it in review.
+
+## CSRF
+
+Give `app` a secret and every state-changing route is protected:
 
 ```ecko
-template greet(name) = """<h1>Hi {webkit.e(name)}</h1>"""   # safe
+app = webkit.app({ routes: routes, csrf: reveal(SECRET) })
 ```
 
-A forgotten `e()` on user data is an XSS hole - escape every value that came
-from a request, a database, or a model.
+Put `{csrf}` in every form that POSTs, from `webkit.csrf_field(req)`. A
+`POST`, `PUT`, `PATCH` or `DELETE` without a valid token is answered 403.
 
-### Flash & forms
+The token is a signed double-submit cookie, so it works on a login form too,
+where there is no session yet. Login CSRF is a real attack and a session-bound
+token would leave exactly that form unprotected.
+
+`GET`, `HEAD` and `OPTIONS` are exempt, on the assumption they are side-effect
+free. An app that changes state on `GET` is outside what this can defend.
+
+## Sessions
+
+Two stores, one interface - `start(resp, data)`, `read(req)`, `end(req, resp)` -
+so swapping between them does not touch handler code.
 
 ```ecko
-resp = webkit.flash(webkit.redirect("/"), "Profile saved", SECRET)   # set on the response
-msgs = webkit.flashes(req, SECRET)                                   # read on the next request
-resp = webkit.clear_flash(resp)                                      # expire them, or they repeat
+# Zero setup: the data travels in a signed cookie.
+sessions = webkit.cookie_store(reveal(SECRET))
 
-result = webkit.validate(req.form, {
-    email: { type: "email" },
-    age: { type: "int", min: 18 },
-})
-# result.valid / result.errors / result.values
+# Server-side: only a random id travels, the data lives wherever you put it.
+sessions = webkit.store(
+    {
+        load: fn(id) db.session_user(DB, id),
+        save: fn(id, data) db.put_session(DB, id, data.user),
+        delete: fn(id) db.end_session(DB, id),
+    },
+)
+
+resp = sessions.start(webkit.redirect("/", 303), { user: id })
+who = sessions.read(req)
+resp = sessions.end(req, webkit.redirect("/", 303))
 ```
+
+**Pick the cookie store for convenience, the server store for control.** A
+cookie session is visible to the client (signing proves it was not altered, it
+does not hide it) and **cannot be revoked**: the only copy is the one the client
+holds, so expiring the cookie asks a browser to forget it and an attacker
+holding the value keeps it. A server store is what makes logout-everywhere real.
+
+`require_session` turns anonymous requests away, and attaches the session so
+handlers below read it with `session_of(req)`:
+
+```ecko
+webkit.blueprint("", authed_routes, [webkit.require_session(sessions)])
+```
+
+Being middleware is the point: a route added to that list is protected by being
+in the list, rather than by remembering to call something.
+
+## API
+
+| call | what it does |
+|---|---|
+| `render(tpl, values?)` | a template with every `{name}` substituted and escaped |
+| `raw(s)` / `is_safe(v)` | mark text as already-safe; test whether a value is |
+| `join_safe(items, sep?)` | render and join fragments into one piece of markup |
+| `escape(s)` | escape one value, for markup built by hand |
+| `html(body, opts?)` | an HTML response; refuses anything but markup |
+| `json(v, opts?)` / `text(s, opts?)` | JSON and plain-text responses |
+| `file(path, opts?)` / `static(prefix, dir)` | serve a file; serve a directory |
+| `content_type(path)` | the MIME type for a file extension |
+| `redirect(url, status?)` / `abort(status, body?)` | redirect; give up mid-request |
+| `cache(resp, v)` / `cache_control(rules)` | set cache-control, directly or by prefix |
+| `csrf_protect(secret, opts?)` | middleware enforcing the token |
+| `csrf_field(req)` / `csrf_token(req)` | the hidden input; the raw token |
+| `cookie_store(secret, opts?)` / `store(handlers, opts?)` | the two session stores |
+| `require_session(st, opts?)` / `session_of(req)` | the guard; the session it attached |
+| `cookie(name, v, opts)` / `parse_cookies(h)` / `cookies(req)` | cookies |
+| `sign(v, secret)` / `unsign(signed, secret)` | HMAC-signed values |
+| `query(req, k, d?)` / `query_int(req, k, d?)` | query and path parameters |
+| `form(req, k, d?)` / `json_body(req)` | submitted form fields; a JSON body |
+| `flash(resp, msg, secret)` / `flashes(req, secret)` / `clear_flash(resp)` | flash messages |
+| `validate(values, schema)` | form validation |
+| `app(spec)` / `blueprint(prefix, routes, mw?)` | assemble an app; group routes |
+| `url_for(pattern, params?, query?)` | build a URL from a route pattern |
+| `cors(opts)` / `security_headers()` / `with_headers(resp, h)` | headers |
+
+## Notes
+
+**One limitation, stated plainly.** Signature and token comparisons use a
+length-then-content compare that does not exit early, which is far better than
+`==` here. It is written in Ecko, so it is not a hardware-level guarantee: the
+interpreter makes no promise about the timing of the work underneath it. `std`
+has no constant-time compare primitive yet.
+
+**Not included:** multipart form data, so no file uploads.
 
 ## Testing
 
 ```bash
-ecko test # offline: escaping, cookies, sessions, flash, validation, middleware, framework (41 cases)
+ecko test tests/
 ```
 
 ## License

@@ -1,0 +1,111 @@
+# webkit/session - sessions behind one interface, over a cookie or your own store.
+#
+# Two stores, one shape, so swapping between them does not touch handler code:
+#
+#   start(resp, data) -> resp carrying the session cookie
+#   read(req)         -> the session data, or null
+#   end(req, resp)    -> resp with the session ended
+#
+# `cookie_store` needs no infrastructure: the data travels in a signed cookie.
+# That is the zero-setup path, and it buys its convenience with two real limits.
+# The data is visible to the client (signing proves it was not altered, it does
+# not hide it), and it cannot be revoked server-side, because the only copy is
+# the one the client holds. Expiring the cookie asks the browser to forget it;
+# an attacker holding the value keeps it.
+#
+# `store` fixes both by keeping only a random id in the cookie and the data
+# wherever you put it. That is what makes logout-everywhere and revocation
+# possible, and it is what an app with real accounts wants.
+
+import std.random
+import std.encoding
+import "./util.ecko"
+import "./signing.ecko"
+
+COOKIE_NAME = "sid"
+DEFAULT_MAX_AGE = 604800
+
+fn cookie_header(req) = util.get_or(util.get_or(req, "headers", empty_map()), "cookie", null)
+
+fn raw_cookie(req) = get(signing.parse_cookies(cookie_header(req)), COOKIE_NAME)
+
+fn set_cookie(resp, value, opts) {
+    util.with_header(
+        resp,
+        "set-cookie",
+        signing.cookie(
+            COOKIE_NAME,
+            value,
+            {
+                path: "/",
+                http_only: true,
+                same_site: "Lax",
+                secure: get(opts, "secure") == true,
+                max_age: util.get_or(opts, "max_age", DEFAULT_MAX_AGE),
+            },
+        ),
+    )
+}
+
+fn expire_cookie(resp) {
+    util.with_header(
+        resp,
+        "set-cookie",
+        signing.cookie(
+            COOKIE_NAME,
+            "",
+            { path: "/", max_age: 0, http_only: true, same_site: "Lax" },
+        ),
+    )
+}
+
+## cookie_store(secret, opts?) -> a store keeping the session data in the cookie.
+##
+## Needs nothing but a secret. The data is signed, so it cannot be altered, and
+## it is readable by whoever holds the cookie, so do not put anything in it you
+## would not show the user. It cannot be revoked: see the module header.
+##
+## `opts` takes `max_age` in seconds and `secure` for HTTPS-only.
+##
+## example:
+##   st = cookie_store(SECRET)
+##   resp = st.start(redirect("/"), { user: id })
+export fn cookie_store(secret, opts = empty_map()) {
+    { start: fn(resp, data) {
+        set_cookie(resp, encoding.url_encode(signing.sign(json_encode(data), secret)), opts)
+    }, read: fn(req) {
+        raw = raw_cookie(req)
+        if is_null(raw) { return null }
+        v = signing.unsign(encoding.url_decode(raw), secret)
+        if is_null(v) { null } else { try { json_decode(v) } catch (e) { null } }
+    }, end: fn(req, resp) expire_cookie(resp) }
+}
+
+## store(handlers, opts?) -> a store keeping only a random id in the cookie.
+##
+## `handlers` is `{ load, save, delete }`, called as `load(id)`, `save(id, data)`
+## and `delete(id)`. Back them with whatever you like: `std.sql`, a `cell`, a
+## cache. The id is a 32-byte random token and is not signed, because guessing
+## one is the same problem as guessing a signature and the lookup already fails
+## closed.
+##
+## example:
+##   st = store({
+##       load:   fn(id) db.session(DB, id),
+##       save:   fn(id, data) db.put_session(DB, id, data),
+##       delete: fn(id) db.drop_session(DB, id),
+##   })
+export fn store(handlers, opts = empty_map()) {
+    { start: fn(resp, data) {
+        id = random.token(32)
+        handlers.save(id, data)
+        set_cookie(resp, id, opts)
+    }, read: fn(req) {
+        id = raw_cookie(req)
+        if is_null(id) { null } else { handlers.load(id) }
+    }, end: fn(req, resp) {
+        id = raw_cookie(req)
+        unless is_null(id) { handlers.delete(id) }
+        expire_cookie(resp)
+    } }
+}

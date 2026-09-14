@@ -1,28 +1,52 @@
-# webkit offline demo: templating + signed cookies + middleware, no server.
+# webkit offline demo: escaping, CSRF and sessions, with no server and no network.
 #
 #   ecko example.ecko
 
-import std.web
 import "./main.ecko"
 
 SECRET = "demo-secret-change-me"
 
-# 1. Native templates + explicit escaping (webkit.e on untrusted data).
-template page(title, note) = """<h1>{title}</h1><p>{note}</p>"""
-rendered = page("Welcome", main.e("<script>alert(1)</script>"))
-print("rendered: " + rendered)
-
-# 2. Signed cookies round-trip; tampering is rejected.
-signed = main.sign("user=42", SECRET)
-print("signed:   " + signed)
-print("unsign:   " + string(main.unsign(signed, SECRET)))
-print("tampered: " + string(main.unsign(replace(signed, "42", "99"), SECRET)))
-
-# 3. Middleware composed through the router (called directly, offline).
-app = web.router(
-    [web.get("/", fn(req) ({ status: 200, headers: empty_map(), body: "home" }))],
-    [main.security_headers(), main.cors({ origin: "*" })],
+# 1. Templates escape by default. The payload cannot become markup, and there
+#    is no escape call in sight to forget.
+page = main.render(
+    r"""<h1>{title}</h1><p>{note}</p>""",
+    { title: "Welcome", note: "<script>alert(1)</script>" },
 )
-resp = app({ method: "GET", path: "/", headers: empty_map(), params: empty_map() })
-print("CORS:     " + get(resp.headers, "access-control-allow-origin"))
-print("nosniff:  " + get(resp.headers, "x-content-type-options"))
+print("rendered: " + page.html)
+
+# 2. A response accepts markup, never a bare string. This is what makes the
+#    escaping above impossible to skip.
+print("html():   " + string(main.html(page).status))
+refused = try { main.html("<h1>raw</h1>") } catch (e) { "refused" }
+print("string:   " + string(refused))
+
+# 3. Fragments compose without being escaped twice.
+rows = [
+    main.render(r"""<li>{v}</li>""", { v: "a & b" }),
+    main.render(r"""<li>{v}</li>""", { v: "<b>" }),
+]
+print("nested:   " + main.render(r"""<ul>{rows}</ul>""", { rows: rows }).html)
+
+# 4. CSRF: a POST without the token is refused, with it the handler runs.
+protect = main.csrf_protect(SECRET)
+ok = fn(req) ({ status: 200, headers: empty_map(), body: "posted" })
+seeded = protect({ method: "GET", path: "/", headers: empty_map(), form: empty_map() }, ok)
+token_cookie = split(get(seeded.headers, "set-cookie"), ";")[0]
+tok = main.unsign(split(token_cookie, "=")[1], SECRET)
+no_token = protect(
+    { method: "POST", path: "/", headers: { cookie: token_cookie }, form: empty_map() },
+    ok,
+)
+with_token = protect(
+    { method: "POST", path: "/", headers: { cookie: token_cookie }, form: { _csrf: tok } },
+    ok,
+)
+print("no token: " + string(no_token.status))
+print("token:    " + string(with_token.status))
+
+# 5. Sessions round-trip, and a tampered cookie reads as no session at all.
+store = main.cookie_store(SECRET)
+started = store.start({ status: 200, headers: empty_map(), body: "" }, { user: 42 })
+cookie = split(get(started.headers, "set-cookie"), ";")[0]
+print("session:  " + string(get(store.read({ headers: { cookie: cookie } }), "user")))
+print("tampered: " + string(store.read({ headers: { cookie: cookie + "x" } })))

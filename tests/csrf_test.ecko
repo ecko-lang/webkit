@@ -1,0 +1,112 @@
+# Tests for CSRF protection.
+#
+# The threat is a form on another origin POSTing to this one with the victim's
+# cookies attached. The defence is a signed double-submit token: a cookie this
+# app sets, echoed back in a form field that a cross-origin page cannot read.
+# Login forms matter as much as authenticated ones, which is why the token is
+# not tied to having a session.
+
+import std.test
+import "../csrf.ecko"
+import "../markup.ecko"
+import "../signing.ecko"
+
+SECRET = "test-secret-not-a-real-one"
+
+fn ok_handler(_req) = { status: 200, headers: empty_map(), body: "ok" }
+
+fn run(req) = csrf.protect(SECRET)(req, ok_handler)
+
+fn req_of(method, cookie_header, form) {
+    headers = if is_null(cookie_header) { empty_map() } else { { cookie: cookie_header } }
+    { method: method, path: "/", headers: headers, form: form, params: empty_map() }
+}
+
+# The cookie header a browser would send back after `protect` set one.
+fn cookie_carrying(token) = "csrf=" + signing.sign(token, SECRET)
+
+# --- safe methods ---------------------------------------------------------------
+
+test.case("a GET passes and is issued a token cookie", fn() {
+    r = run(req_of("GET", null, empty_map()))
+    test.eq(r.status, 200)
+    sc = get(r.headers, "set-cookie")
+    test.ok(not is_null(sc), "a token cookie should be issued")
+    test.ok(contains(sc, "HttpOnly"), "the token cookie should be HttpOnly: " + string(sc))
+})
+
+test.case("safe methods are never rejected for a missing token", fn() {
+    for m in ["GET", "HEAD", "OPTIONS"] {
+        test.eq(run(req_of(m, null, empty_map())).status, 200)
+    }
+})
+
+# --- unsafe methods -------------------------------------------------------------
+
+test.case("a POST carrying the matching token passes", fn() {
+    tok = "a-token-value"
+    r = run(req_of("POST", cookie_carrying(tok), { _csrf: tok }))
+    test.eq(r.status, 200)
+})
+
+test.case("a POST with no token at all is refused", fn() {
+    test.eq(run(req_of("POST", cookie_carrying("t"), empty_map())).status, 403)
+})
+
+test.case("a POST with the wrong token is refused", fn() {
+    r = run(req_of("POST", cookie_carrying("right"), { _csrf: "wrong" }))
+    test.eq(r.status, 403)
+})
+
+test.case("every state-changing method is protected, not just POST", fn() {
+    for m in ["POST", "PUT", "PATCH", "DELETE"] {
+        test.eq(run(req_of(m, cookie_carrying("t"), empty_map())).status, 403)
+    }
+})
+
+test.case("a token cookie with a forged signature does not authorise", fn() {
+    # The attacker sets a cookie value they also put in the form. Without the
+    # secret they cannot sign it, so the pair must not be accepted.
+    r = run(req_of("POST", "csrf=forged.0000", { _csrf: "forged" }))
+    test.eq(r.status, 403)
+})
+
+# --- the token as handlers see it -----------------------------------------------
+
+test.case("the token is stable while the cookie lives", fn() {
+    tok = "stable-token"
+    mut seen = []
+    capture = fn(req) {
+        seen = push(seen, csrf.token(req))
+        { status: 200, headers: empty_map(), body: "" }
+    }
+    mw = csrf.protect(SECRET)
+    mw(req_of("GET", cookie_carrying(tok), empty_map()), capture)
+    mw(req_of("GET", cookie_carrying(tok), empty_map()), capture)
+    test.eq(seen[0], tok)
+    test.eq(seen[1], tok)
+})
+
+test.case("field renders a hidden input carrying the token", fn() {
+    mut html = ""
+    capture = fn(req) {
+        html = csrf.field(req).html
+        { status: 200, headers: empty_map(), body: "" }
+    }
+    csrf.protect(SECRET)(req_of("GET", cookie_carrying("tok123"), empty_map()), capture)
+    test.ok(contains(html, "tok123"), "token should appear: " + html)
+    test.ok(contains(html, "hidden"), "should be a hidden input: " + html)
+    test.ok(contains(html, "_csrf"), "should use the expected field name: " + html)
+})
+
+test.case("field returns markup, so it splices into a template", fn() {
+    mut f = null
+    capture = fn(req) {
+        f = csrf.field(req)
+        { status: 200, headers: empty_map(), body: "" }
+    }
+    csrf.protect(SECRET)(req_of("GET", cookie_carrying("t"), empty_map()), capture)
+    test.ok(markup.is_safe(f), "csrf.field must return Safe markup")
+    out = markup.render(r"""<form>{f}</form>""", { f: f }).html
+    test.ok(contains(out, "<input"), "spliced without escaping: " + out)
+})

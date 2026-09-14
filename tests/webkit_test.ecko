@@ -2,17 +2,13 @@
 # auto-escaping templates, signed cookies, cookie building/parsing, and the
 # CORS / security middleware. No network, no server.
 import std.test
-import "./main.ecko"
+import "../main.ecko"
 
 test.case("escape covers the five HTML-significant characters", fn() {
     test.eq(
         main.escape("<a href='x' title=\"y\">A & B</a>"),
         "&lt;a href=&#39;x&#39; title=&quot;y&quot;&gt;A &amp; B&lt;/a&gt;",
     )
-})
-
-test.case("e is an alias for escape", fn() {
-    test.eq(main.e("<b>&"), "&lt;b&gt;&amp;")
 })
 
 test.case("sign then unsign round-trips the value", fn() {

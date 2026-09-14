@@ -59,3 +59,27 @@ export fn security_headers() {
         util.with_header(b, "referrer-policy", "strict-origin-when-cross-origin")
     }
 }
+
+## require_session(st, opts?) -> middleware turning anonymous requests away.
+##
+## Reads the session with `st` and, when there is none, redirects to
+## `opts.redirect` ("/login" unless given). When there is one it is attached to
+## the request, so handlers beneath read it with `session_of(req)` instead of
+## looking it up again.
+##
+## Being middleware rather than a per-handler call is the point: a whole
+## blueprint can require a session without every handler restating it, and a
+## handler added later cannot forget.
+##
+## example:
+##   blueprint("/app", routes, [require_session(st)])
+export fn require_session(st, opts = empty_map()) {
+    to = util.get_or(opts, "redirect", "/login")
+    fn(req, next) {
+        s = st.read(req)
+        if is_null(s) { responses.redirect(to) } else { next(insert(req, "session", s)) }
+    }
+}
+
+## session_of(req) -> the session attached by `require_session`, or null.
+export fn session_of(req) = util.get_or(req, "session", null)

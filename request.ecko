@@ -36,9 +36,6 @@ fn cookie_header(req) = util.get_or(util.get_or(req, "headers", empty_map()), "c
 ## These are raw and unverified. For a signed value use `session` or `flashes`.
 export fn cookies(req) = signing.parse_cookies(cookie_header(req))
 
-## session(req, secret) -> the verified session id, or null.
-export fn session(req, secret) = signing.session_read(cookie_header(req), secret)
-
 ## url_for(pattern, params?, query?) -> a URL built from a route pattern.
 ##
 ## `:name` segments are filled from `params`; `query` is appended sorted and

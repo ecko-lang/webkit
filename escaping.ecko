@@ -13,9 +13,3 @@ export fn escape(s) {
     d = replace(c, "\"", "&quot;")
     replace(d, "'", "&#39;")
 }
-
-## e(s) -> the same as `escape`, named short for use inside templates.
-##
-## example:
-##   html("<p>Hello, {e(name)}</p>")
-export fn e(s) = escape(s)
