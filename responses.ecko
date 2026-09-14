@@ -79,10 +79,10 @@ export fn abort(status, body = "") {
 
 ## html(body, opts?) -> an HTML response. `opts.cache` sets cache-control.
 ##
-## `body` must be markup from `render` or `raw`, never a plain string. That
-## refusal is the whole point: the only route to the wire runs through a value
-## that has already been escaped or has been explicitly vouched for, so an
-## unescaped string cannot reach the page by being forgotten about.
+## `body` must be markup from `render` or `raw`, never a plain string. The
+## refusal is the point. Every route to the wire runs through a value that was
+## either escaped or explicitly vouched for, so forgetting cannot put unescaped
+## text on the page.
 export fn html(body, opts = empty_map()) {
     unless markup.is_safe(body) {
         error(

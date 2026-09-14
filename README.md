@@ -3,9 +3,9 @@
 Web-app batteries for Ecko: HTML templates that escape by default, CSRF
 protection, sessions that can be revoked, and the middleware around them.
 
-It builds on `std.web` rather than replacing it. `std.web` gives you the router
-and the verbs; webkit gives you everything a real app needs on top, and the two
-compose, so `web.get("/u/:handle", profile)` is still how you declare a route.
+It builds on `std.web` rather than replacing it. The router stays where it is,
+so `web.get("/u/:handle", profile)` is still how you declare a route, and you
+reach for webkit only where you need it.
 
 ## Install
 
@@ -24,20 +24,27 @@ Needs Ecko 0.25.0 or later.
 ```ecko
 import std.web
 import std.http
+import std.os
 import webkit
 
-sessions = webkit.cookie_store(reveal(SECRET))
+SECRET = secret(os.env("APP_SECRET"))
 
 fn home(req) {
-    page = webkit.render(
-        r"""<h1>Hello, {name}</h1>
+    webkit.html(
+        webkit.render(
+            r"""<h1>Hello, {name}</h1>
             <form method="post" action="/post">{csrf}
               <textarea name="body"></textarea>
               <button type="submit">Post</button>
             </form>""",
-        { name: webkit.query(req, "name", "world"), csrf: webkit.csrf_field(req) },
+            { name: webkit.query(req, "name", "world"), csrf: webkit.csrf_field(req) },
+        ),
     )
-    webkit.html(page)
+}
+
+fn create(req) {
+    print(webkit.form(req, "body", ""))
+    webkit.redirect("/", 303)
 }
 
 app = webkit.app(
@@ -50,6 +57,9 @@ app = webkit.app(
 
 http.serve(8080, app)
 ```
+
+That is a whole program. The form posts, `{name}` is escaped on the way out,
+and the POST is refused without the token `{csrf}` puts in the form.
 
 ## Templates that escape by default
 
@@ -138,10 +148,13 @@ resp = sessions.end(req, webkit.redirect("/", 303))
 ```
 
 **Pick the cookie store for convenience, the server store for control.** A
-cookie session is visible to the client (signing proves it was not altered, it
-does not hide it) and **cannot be revoked**: the only copy is the one the client
-holds, so expiring the cookie asks a browser to forget it and an attacker
-holding the value keeps it. A server store is what makes logout-everywhere real.
+cookie session is visible to whoever holds the cookie. Signing proves it was not
+altered, it does not hide it.
+
+It also **cannot be revoked**. The only copy is the one the client holds, so
+expiring the cookie asks a browser to forget it, and an attacker who kept the
+value still has a session. A server store is what makes logout-everywhere
+real.
 
 `require_session` turns anonymous requests away, and attaches the session so
 handlers below read it with `session_of(req)`:
