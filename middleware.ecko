@@ -1,5 +1,5 @@
 # webkit/middleware - CORS, security-header, and cache-control middleware for
-# web.router. Each returns a |req, next| function.
+# web.router. Each returns a fn(req, next) function.
 
 import "./util.ecko"
 import "./responses.ecko"
