@@ -1,6 +1,6 @@
 {
   "module": "github.com/ecko-lang/webkit",
-  "version": "0.29.0",
+  "version": "0.30.0",
   "entrypoint": "main.ecko",
   "description": "Web-app batteries for Ecko: HTML templates that escape by default, CSRF protection, revocable sessions, and the middleware around them. Builds on std.web rather than replacing it.",
   "author": "Sean Nieuwoudt <sean@underwulf.com>",
