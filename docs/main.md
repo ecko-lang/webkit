@@ -111,7 +111,8 @@ This is how a handler gives up mid-request: `abort(404)` from three calls deep
 reaches the registered 404 handler without every caller checking a return.
 
 ```ecko
-post = find(id) ; if post == null { abort(404) }
+post = find(id)
+if post == null { abort(404) }
 ```
 
 ## `html(body, opts = empty_map())`

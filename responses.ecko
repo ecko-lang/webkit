@@ -72,7 +72,8 @@ export fn redirect(url, status = 302) {
 ## reaches the registered 404 handler without every caller checking a return.
 ##
 ## example:
-##   post = find(id) ; if post == null { abort(404) }
+##   post = find(id)
+##   if post == null { abort(404) }
 export fn abort(status, body = "") {
     error({ kind: "http", status: status, message: body })
 }
