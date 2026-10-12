@@ -18,7 +18,7 @@ fn to_int_or(v, d) {
 ## query_int(req, key, default?) -> a query parameter as a whole number.
 ##
 ## Absent or unparseable both give `default` (0 unless given), so `?page=abc`
-## cannot crash a handler.
+## cannot make a handler throw.
 export fn query_int(req, key, default = 0) = to_int_or(query(req, key, null), default)
 
 ## form(req, key, default?) -> a submitted form field as text.

@@ -45,25 +45,27 @@ fn forbidden() {
     }
 }
 
-## token(req) -> the CSRF token for this request, or null outside `protect`.
+## csrf_token(req) -> the CSRF token for this request, or null outside
+## `csrf_protect`.
 ##
-## `protect` puts it on the request, so any handler beneath it can read it. Most
-## code wants `field` instead.
+## `csrf_protect` puts it on the request, so any handler beneath it can read
+## it. Most code wants `csrf_field` instead.
 export fn token(req) = util.get_or(req, "csrf", null)
 
-## field(req) -> the hidden input carrying the token, as markup.
+## csrf_field(req) -> the hidden input carrying the token, as markup.
 ##
 ## Splice it into every form that POSTs, since without it the request is
 ## refused. It is Safe markup, so it goes straight into a `render` template.
 ##
 ## example:
-##   render(r"""<form method="post">{csrf}...</form>""", { csrf: field(req) })
+##   render(r"""<form method="post">{csrf}...</form>""", { csrf: csrf_field(req) })
 export fn field(req) = markup.render(
     r"""<input type="hidden" name="_csrf" value="{tok}">""",
     { tok: token(req) },
 )
 
-## protect(secret, opts?) -> middleware refusing unsafe requests without a token.
+## csrf_protect(secret, opts?) -> middleware refusing unsafe requests without a
+## token.
 ##
 ## Issues the token cookie when there is not already a valid one, checks
 ## `POST`/`PUT`/`PATCH`/`DELETE` against it, and answers 403 on a mismatch. The

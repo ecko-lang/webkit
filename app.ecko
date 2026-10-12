@@ -61,7 +61,7 @@ export fn blueprint(prefix, routes, mw = []) {
 ## `{ "404": page }`.
 ##
 ## `csrf` is a secret, and giving one installs CSRF protection over every
-## state-changing route. Forms then need `csrf.field(req)` in them, and a form
+## state-changing route. Forms then need `csrf_field(req)` in them, and a form
 ## without it is refused. Leaving `csrf` out leaves those routes unprotected,
 ## which is almost never what you want for anything with a session.
 ##
@@ -70,7 +70,7 @@ export fn blueprint(prefix, routes, mw = []) {
 ## an explicit `abort(404)`.
 ##
 ## example:
-##   handler = app({ routes: [...], security: true, errors: { "404": not_found } })
+##   handler = app({ routes: routes, security: true, errors: { "404": not_found } })
 ##   http.serve(8080, handler)
 export fn app(spec) {
     errors = util.get_or(spec, "errors", empty_map())

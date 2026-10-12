@@ -6,6 +6,54 @@ with_headers(resp, hmap) -> `resp` with every name/value merged into headers.
 
 Existing headers are kept unless `hmap` names them.
 
+## `is_safe(v)`
+
+is_safe(v) -> true when `v` came from `render` or `raw`.
+
+A plain string is not safe, and neither is a map that happens to have an
+`html` key - only the real type passes.
+
+## `raw(s)`
+
+raw(s) -> `s` marked safe, spliced into templates without escaping.
+
+The audited escape hatch, and the only way unescaped text reaches a page.
+Everything passed here is trusted completely, so it must never carry user
+input that has not already been escaped. Grep for it in review.
+
+```ecko
+raw("<br>")
+```
+
+## `join_safe(items, sep = "")`
+
+join_safe(items, sep?) -> the items rendered and joined into one Safe.
+
+Each item follows the same rule as a substitution: already-Safe passes
+through, anything else is escaped. This is how a list of rows becomes one
+fragment when you want a separator between them; a bare list substituted
+into `render` is joined with nothing.
+
+```ecko
+join_safe(["a", "b"], ", ")
+```
+
+## `render(tpl, values = empty_map())`
+
+render(tpl, values?) -> a Safe with every `{name}` substituted.
+
+Every substituted value is escaped unless it is already Safe, which is what
+makes nesting compose: a fragment built by `render` splices into another
+`render` without being escaped twice. `{{` and `}}` are literal braces, for
+inline CSS and JavaScript.
+
+An unknown placeholder raises rather than rendering blank, so a typo is a
+failure you see rather than a hole in the page you do not.
+
+```ecko
+render(r"""<p class="note">{body}</p>""", { body: user_text })
+```
+
 ## `escape(s)`
 
 escape(s) -> `s` with the five HTML-significant characters replaced.
@@ -14,14 +62,6 @@ escape(s) -> `s` with the five HTML-significant characters replaced.
 element text and in quoted attribute values. It is not safe unquoted, nor
 inside a `<script>` or `<style>` body, nor in a URL - those need their own
 encoding.
-
-## `e(s)`
-
-e(s) -> the same as `escape`, named short for use inside templates.
-
-```ecko
-html("<p>Hello, {e(name)}</p>")
-```
 
 ## `sign(value, secret)`
 
@@ -57,25 +97,6 @@ cookie("sid", tok, { path: "/", http_only: true, same_site: "Lax" })
 parse_cookies(header) -> a { name: value } map from a request Cookie header.
 
 An empty map for a null or unparseable header.
-
-## `session_new(secret)`
-
-session_new(secret) -> { id, cookie } for a fresh session.
-
-`id` is a 32-byte random token to key your own store by; `cookie` is the
-Set-Cookie header carrying it signed, HttpOnly, SameSite=Lax, for a week.
-
-```ecko
-s = session_new(secret)
-with_headers(redirect("/"), { "set-cookie": s.cookie })
-```
-
-## `session_read(header, secret)`
-
-session_read(header, secret) -> the session id from a Cookie header, or null.
-
-Null means no session, not a forged one - a tampered cookie reads the same as
-an absent one, which is what you want at a route boundary.
 
 ## `content_type(path)`
 
@@ -119,7 +140,10 @@ if post == null { abort(404) }
 
 html(body, opts?) -> an HTML response. `opts.cache` sets cache-control.
 
-The body is sent as given, so escape anything user-supplied with `e`.
+`body` must be markup from `render` or `raw`, never a plain string. The
+refusal is the point. Every route to the wire runs through a value that was
+either escaped or explicitly vouched for, so forgetting cannot put unescaped
+text on the page.
 
 ## `json(value, opts = empty_map())`
 
@@ -164,6 +188,92 @@ Sets `nosniff`, `X-Frame-Options: DENY` and a strict-origin referrer policy.
 Framing is denied outright, so if the page must be embedded, set your own
 frame policy instead of using this.
 
+## `require_session(st, opts = empty_map())`
+
+require_session(st, opts?) -> middleware turning anonymous requests away.
+
+Reads the session with `st` and, when there is none, redirects to
+`opts.redirect` ("/login" unless given). When there is one it is attached to
+the request, so handlers beneath read it with `session_of(req)` instead of
+looking it up again.
+
+Being middleware rather than a per-handler call is the point: a whole
+blueprint can require a session without every handler restating it, and a
+handler added later cannot forget.
+
+```ecko
+blueprint("/app", routes, [require_session(st)])
+```
+
+## `session_of(req)`
+
+session_of(req) -> the session attached by `require_session`, or null.
+
+## `cookie_store(secret, opts = empty_map())`
+
+cookie_store(secret, opts?) -> a store keeping the session data in the cookie.
+
+Needs nothing but a secret. The data is signed, so it cannot be altered, and
+it is readable by whoever holds the cookie, so do not put anything in it you
+would not show the user. It cannot be revoked: see the module header.
+
+`opts` takes `max_age` in seconds and `secure` for HTTPS-only.
+
+```ecko
+st = cookie_store(SECRET)
+resp = st.start(redirect("/"), { user: id })
+```
+
+## `store(handlers, opts = empty_map())`
+
+store(handlers, opts?) -> a store keeping only a random id in the cookie.
+
+`handlers` is `{ load, save, delete }`, called as `load(id)`, `save(id, data)`
+and `delete(id)`. Back them with whatever you like: `std.sql`, a `cell`, a
+cache. The id is a 32-byte random token and is not signed, because guessing
+one is the same problem as guessing a signature and the lookup already fails
+closed.
+
+```ecko
+st = store({
+    load:   fn(id) db.session(DB, id),
+    save:   fn(id, data) db.put_session(DB, id, data),
+    delete: fn(id) db.drop_session(DB, id),
+})
+```
+
+## `csrf_token(req)`
+
+csrf_token(req) -> the CSRF token for this request, or null outside
+`csrf_protect`.
+
+`csrf_protect` puts it on the request, so any handler beneath it can read
+it. Most code wants `csrf_field` instead.
+
+## `csrf_field(req)`
+
+csrf_field(req) -> the hidden input carrying the token, as markup.
+
+Splice it into every form that POSTs, since without it the request is
+refused. It is Safe markup, so it goes straight into a `render` template.
+
+```ecko
+render(r"""<form method="post">{csrf}...</form>""", { csrf: csrf_field(req) })
+```
+
+## `csrf_protect(secret, opts = empty_map())`
+
+csrf_protect(secret, opts?) -> middleware refusing unsafe requests without a
+token.
+
+Issues the token cookie when there is not already a valid one, checks
+`POST`/`PUT`/`PATCH`/`DELETE` against it, and answers 403 on a mismatch. The
+comparison does not exit early, so it does not leak how much of a guess was
+right.
+
+`app(spec)` installs this for you when given a `csrf` secret, so reach for it
+directly only when assembling a router by hand.
+
 ## `query(req, key, default = null)`
 
 query(req, key, default?) -> a query-string or path parameter as text.
@@ -175,7 +285,7 @@ query(req, key, default?) -> a query-string or path parameter as text.
 query_int(req, key, default?) -> a query parameter as a whole number.
 
 Absent or unparseable both give `default` (0 unless given), so `?page=abc`
-cannot crash a handler.
+cannot make a handler throw.
 
 ## `form(req, key, default = null)`
 
@@ -190,10 +300,6 @@ json_body(req) -> the decoded JSON body, or null when there was none.
 cookies(req) -> a { name: value } map of the request's cookies.
 
 These are raw and unverified. For a signed value use `session` or `flashes`.
-
-## `session(req, secret)`
-
-session(req, secret) -> the verified session id, or null.
 
 ## `url_for(pattern, params = empty_map(), query = empty_map())`
 
@@ -254,15 +360,21 @@ straight into an app's `routes` and it splices in.
 
 app(spec) -> a request handler for `http.serve`.
 
-`spec` is `{ routes, middleware, errors, security, cors }`. Middleware runs
-outermost-first in the order given, after `security` and `cors` if those are
-set. `errors` maps a status as text to a handler, so `{ "404": page }`.
+`spec` is `{ routes, middleware, errors, security, cors, csrf }`. Middleware
+runs outermost-first in the order given, after `security`, `cors` and `csrf`
+if those are set. `errors` maps a status as text to a handler, so
+`{ "404": page }`.
+
+`csrf` is a secret, and giving one installs CSRF protection over every
+state-changing route. Forms then need `csrf_field(req)` in them, and a form
+without it is refused. Leaving `csrf` out leaves those routes unprotected,
+which is almost never what you want for anything with a session.
 
 Every error handler is called as `handler(req, err)`. `err` is null when the
 router simply found no route, so one 404 handler serves both that case and
 an explicit `abort(404)`.
 
 ```ecko
-handler = app({ routes: [...], security: true, errors: { "404": not_found } })
+handler = app({ routes: routes, security: true, errors: { "404": not_found } })
 http.serve(8080, handler)
 ```

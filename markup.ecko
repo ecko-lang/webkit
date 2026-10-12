@@ -20,7 +20,7 @@ import "./escaping.ecko"
 # A string known to be HTML-safe: either escaped by `render` or vouched for by
 # `raw`. It is a struct rather than a string so that it cannot be mistaken for
 # one, and so that a lookalike map cannot impersonate it.
-type Safe = Safe { html: String }
+type Safe { html: String }
 
 IDENT_START = "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ_"
 IDENT_REST = "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ_0123456789"

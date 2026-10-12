@@ -17,7 +17,7 @@ ecko get github.com/ecko-lang/webkit
 import webkit
 ```
 
-Needs Ecko 0.27.0 or later, for `hash.constant_eq`.
+Needs Ecko 0.64.0 or later, for the one-line record form `type Safe { ... }`.
 
 ## Usage
 
@@ -85,7 +85,7 @@ Fragments compose, because a value that is already markup is spliced rather
 than escaped again:
 
 ```ecko
-rows = []
+mut rows = []
 for p in posts {
     rows = push(rows, webkit.render(r"""<li>{body}</li>""", { body: p.body }))
 }
@@ -134,7 +134,7 @@ so swapping between them does not touch handler code.
 sessions = webkit.cookie_store(reveal(SECRET))
 
 # Server-side: only a random id travels, the data lives wherever you put it.
-sessions = webkit.store(
+let sessions = webkit.store(
     {
         load: fn(id) db.session_user(DB, id),
         save: fn(id, data) db.put_session(DB, id, data.user),
@@ -144,7 +144,7 @@ sessions = webkit.store(
 
 resp = sessions.start(webkit.redirect("/", 303), { user: id })
 who = sessions.read(req)
-resp = sessions.end(req, webkit.redirect("/", 303))
+let resp = sessions.end(req, webkit.redirect("/", 303))
 ```
 
 **Pick the cookie store for convenience, the server store for control.** A
